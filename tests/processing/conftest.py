@@ -71,6 +71,32 @@ def _prepare_spark_environment() -> None:
 _prepare_spark_environment()
 
 
+def _hadoop_file_writes_available() -> bool:
+    """Whether Spark can write files on this host.
+
+    Hadoop's filesystem layer needs `winutils.exe` on Windows and aborts with
+    "HADOOP_HOME and hadoop.home.dir are unset" without it. In-memory
+    transformations work regardless; only tests that actually write are affected.
+    The deployed pipeline runs on Linux containers, where this is never an issue.
+    """
+    if os.name != "nt":
+        return True
+    hadoop_home = os.environ.get("HADOOP_HOME")
+    return bool(hadoop_home and (Path(hadoop_home) / "bin" / "winutils.exe").exists())
+
+
+# Applied to tests that write Parquet to a local path. The same write path is
+# covered end-to-end against MinIO in the Docker integration suite, so skipping
+# here loses coverage only on a Windows developer machine, not in CI or the demo.
+requires_hadoop_writes = pytest.mark.skipif(
+    not _hadoop_file_writes_available(),
+    reason=(
+        "Spark file writes require winutils.exe on Windows (set HADOOP_HOME). "
+        "The Parquet/MinIO write path is verified by the Docker integration tests."
+    ),
+)
+
+
 @pytest.fixture(scope="session")
 def spark():
     """A local SparkSession shared by every test in the session.
