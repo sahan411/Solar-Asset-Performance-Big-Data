@@ -205,6 +205,83 @@ def _apply_performance_model(df: DataFrame, settings: StreamSettings) -> DataFra
     )
 
 
+def portfolio_metrics(plant_level: DataFrame) -> DataFrame:
+    """Roll per-plant metrics up into a single portfolio row.
+
+    WEIGHTING
+    Portfolio performance is sum(actual) / sum(expected), never the mean of the
+    plants' percentages. A 5 MW plant at 95% and a 500 kW plant at 50% is a
+    portfolio at roughly 91%, not 72.5% — an unweighted mean lets the smallest
+    site distort the number the business actually cares about.
+
+    NIGHT HANDLING
+    A plant whose expected power is NULL (irradiance below the operating
+    threshold) is excluded from *both* sides of the ratio. Including its zero
+    output in the numerator while omitting its unknown expectation from the
+    denominator would drag portfolio performance toward zero at dusk.
+    """
+    # Numerator counts only plants that also contribute a denominator.
+    comparable_actual = when(
+        col("expected_power_kw").isNotNull(), col("current_power_kw")
+    ).otherwise(lit(None))
+
+    aggregated = plant_level.agg(
+        spark_min("window_start").alias("window_start"),
+        spark_max("window_end").alias("window_end"),
+        spark_sum("current_power_kw").alias("current_power_kw"),
+        # Portfolio power at any instant is the sum of plant powers, so summing
+        # the plants' time-averages gives the portfolio's time-average.
+        spark_sum("avg_power_kw").alias("avg_power_kw"),
+        # SUM ignores NULLs, so night-time plants drop out of the denominator.
+        spark_sum("expected_power_kw").alias("expected_power_kw"),
+        spark_sum(comparable_actual).alias("_comparable_actual_kw"),
+        spark_sum("estimated_loss_kw").alias("estimated_loss_kw"),
+        spark_sum("online_inverters").alias("online_inverters"),
+        spark_sum("offline_inverters").alias("offline_inverters"),
+    )
+
+    return (
+        aggregated
+        .withColumn(
+            "performance_pct",
+            when(
+                col("expected_power_kw").isNotNull() & (col("expected_power_kw") > 0),
+                col("_comparable_actual_kw") / col("expected_power_kw") * lit(100.0),
+            ).otherwise(lit(None)),
+        )
+        .withColumn(
+            "availability_pct",
+            when(
+                (col("online_inverters") + col("offline_inverters")) > 0,
+                col("online_inverters")
+                / (col("online_inverters") + col("offline_inverters"))
+                * lit(100.0),
+            ).otherwise(lit(None)),
+        )
+        .drop("_comparable_actual_kw")
+    )
+
+
+# Columns written to `live_portfolio_metrics`, in table order.
+PORTFOLIO_METRIC_COLUMNS = (
+    "window_start",
+    "window_end",
+    "current_power_kw",
+    "avg_power_kw",
+    "expected_power_kw",
+    "online_inverters",
+    "offline_inverters",
+    "availability_pct",
+    "performance_pct",
+    "estimated_loss_kw",
+)
+
+
+def select_portfolio_metric_columns(df: DataFrame) -> DataFrame:
+    """Project onto the serving table's column contract."""
+    return df.select(*[col(name) for name in PORTFOLIO_METRIC_COLUMNS])
+
+
 # Columns written to `live_plant_metrics`, in table order.
 PLANT_METRIC_COLUMNS = (
     "plant_id",
