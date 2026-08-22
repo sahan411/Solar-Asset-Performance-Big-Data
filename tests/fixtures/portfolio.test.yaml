@@ -1,0 +1,29 @@
+# Test fixture only — NOT the project's portfolio.
+#
+# The real portfolio (5 plants, 5-10 inverters each) is owned by Member 1 at
+# simulators/config/portfolio.yaml. This file exists so the parser and seeder can
+# be tested without depending on that file's contents, and is deliberately small.
+plants:
+  - id: PLANT_01
+    name: North Ridge Solar
+    capacity_kw: 4000
+    timezone: UTC
+    inverters:
+      - id: INV_01
+        rated_power_kw: 1000
+      - id: INV_02
+        rated_power_kw: 1000
+      - id: INV_03
+        rated_power_kw: 1000
+      - id: INV_04
+        rated_power_kw: 1000
+
+  - id: PLANT_02
+    name: East Field Solar
+    capacity_kw: 2000
+    inverters:
+      - id: INV_01
+        name: East Field Inverter A
+        rated_power_kw: 1000
+      - id: INV_02
+        rated_power_kw: 1000
