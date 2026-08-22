@@ -52,6 +52,21 @@ VALID_EVENT: dict[str, Any] = {
 }
 
 
+def utc_ts(
+    year: int, month: int, day: int, hour: int = 0, minute: int = 0, second: int = 0
+) -> "datetime":
+    """A timezone-aware UTC datetime, for building test DataFrames.
+
+    PySpark converts a NAIVE datetime to its internal representation by treating
+    it as *host-local* time, so `datetime(2026, 8, 21, 5, 0)` is stored as
+    23:30Z on a UTC+5:30 machine. Timezone-aware values are converted correctly,
+    so always build test timestamps through this helper.
+    """
+    from datetime import datetime, timezone
+
+    return datetime(year, month, day, hour, minute, second, tzinfo=timezone.utc)
+
+
 def utc(column: str, alias: str | None = None) -> Column:
     """Format a timestamp column as a UTC string for assertions.
 
