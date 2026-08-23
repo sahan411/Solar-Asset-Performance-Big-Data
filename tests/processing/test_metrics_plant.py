@@ -34,8 +34,7 @@ SETTINGS = StreamSettings(
     min_irradiance_wm2=150.0,
     reference_irradiance_wm2=1000.0,
     underperformance_threshold_pct=80.0,
-    underperformance_sustain_seconds=30,
-    offline_sustain_seconds=15,
+    alert_sustain_seconds=3600,
 )
 
 
