@@ -155,8 +155,17 @@ class StreamSettings:
     reference_irradiance_wm2: float
 
     underperformance_threshold_pct: float
-    underperformance_sustain_seconds: int
-    offline_sustain_seconds: int
+
+    # How long a fault must persist before it becomes an alert, measured in
+    # EVENT-TIME seconds (simulated plant time), not wall-clock seconds. Event
+    # time keeps the rule meaningful under the compressed demo clock and makes
+    # alerting replay-safe: reprocessing history yields the same alerts.
+    #
+    # The default is one simulated hour. Under the default demo clock (one
+    # simulated day = 300 real seconds) that is roughly 12 real seconds after a
+    # fault begins — long enough to demonstrate that brief dips are ignored,
+    # short enough to fit a live demo. A production deployment would use hours.
+    alert_sustain_seconds: int
 
     @staticmethod
     def from_env() -> "StreamSettings":
@@ -168,8 +177,7 @@ class StreamSettings:
             min_irradiance_wm2=_as_float("MIN_IRRADIANCE_WM2", 150.0),
             reference_irradiance_wm2=_as_float("REFERENCE_IRRADIANCE_WM2", 1000.0),
             underperformance_threshold_pct=_as_float("UNDERPERFORMANCE_THRESHOLD_PCT", 80.0),
-            underperformance_sustain_seconds=_as_int("UNDERPERFORMANCE_SUSTAIN_SECONDS", 30),
-            offline_sustain_seconds=_as_int("OFFLINE_SUSTAIN_SECONDS", 15),
+            alert_sustain_seconds=_as_int("ALERT_SUSTAIN_SECONDS", 3600),
         )
         settings.validate()
         return settings
@@ -181,8 +189,8 @@ class StreamSettings:
             raise ConfigError("MIN_IRRADIANCE_WM2 must not be negative.")
         if not 0 < self.underperformance_threshold_pct <= 100:
             raise ConfigError("UNDERPERFORMANCE_THRESHOLD_PCT must be in (0, 100].")
-        if self.underperformance_sustain_seconds < 0:
-            raise ConfigError("UNDERPERFORMANCE_SUSTAIN_SECONDS must not be negative.")
+        if self.alert_sustain_seconds < 0:
+            raise ConfigError("ALERT_SUSTAIN_SECONDS must not be negative.")
 
 
 @dataclass(frozen=True)
