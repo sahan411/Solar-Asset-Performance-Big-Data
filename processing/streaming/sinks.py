@@ -95,22 +95,31 @@ UPSERT_PORTFOLIO_METRICS = build_upsert(
 )
 
 
+def execute_batch_metrics_write(
+    conn,
+    plant_rows: Sequence[Sequence[Any]],
+    portfolio_rows: Sequence[Sequence[Any]],
+) -> tuple[int, int]:
+    """Upsert both metric tables inside the caller's transaction.
+
+    Takes a connection rather than opening one so the metric write, the alert
+    reconciliation and the health update all commit together. Splitting them
+    across transactions would let the serving layer observe metrics that
+    disagree with the alert state derived from the same telemetry.
+    """
+    plants = execute_batch(conn, UPSERT_PLANT_METRICS, list(plant_rows))
+    portfolio = execute_batch(conn, UPSERT_PORTFOLIO_METRICS, list(portfolio_rows))
+    return plants, portfolio
+
+
 def write_live_metrics(
     database_url: str,
     plant_rows: Sequence[Sequence[Any]],
     portfolio_rows: Sequence[Sequence[Any]],
 ) -> tuple[int, int]:
-    """Persist one microbatch's metrics in a single transaction.
-
-    Plant and portfolio rows are written together so the serving layer can never
-    read a portfolio total that disagrees with the plant rows it was derived
-    from.
-    """
+    """Standalone wrapper that owns its own connection and transaction."""
     if not plant_rows and not portfolio_rows:
         return 0, 0
 
     with connect(database_url) as conn:
-        plants = execute_batch(conn, UPSERT_PLANT_METRICS, list(plant_rows))
-        portfolio = execute_batch(conn, UPSERT_PORTFOLIO_METRICS, list(portfolio_rows))
-
-    return plants, portfolio
+        return execute_batch_metrics_write(conn, plant_rows, portfolio_rows)

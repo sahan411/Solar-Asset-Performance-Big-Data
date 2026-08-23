@@ -110,6 +110,14 @@ def spark():
         app_name="solariq-tests",
         object_store=None,
         master="local[2]",
+        # Pin the driver to loopback explicitly. SPARK_LOCAL_IP alone is not
+        # always enough: Docker Desktop adds a `kubernetes.docker.internal` entry
+        # that Spark can resolve the driver to instead, after which workers fail
+        # to connect back and tests fail intermittently on an unrelated stage.
+        extra_config={
+            "spark.driver.host": "127.0.0.1",
+            "spark.driver.bindAddress": "127.0.0.1",
+        },
     )
     yield session
     session.stop()
