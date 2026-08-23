@@ -22,7 +22,7 @@ from processing.streaming.validation import (
     validate_telemetry,
 )
 from tests.processing._events import kafka_frame, telemetry_event
-from tests.processing.conftest import requires_hadoop_writes
+from tests.conftest import requires_hadoop_writes
 
 pytestmark = pytest.mark.spark
 
