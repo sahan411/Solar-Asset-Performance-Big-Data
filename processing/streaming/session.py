@@ -64,11 +64,13 @@ def create_spark_session(
     app_name: str = "solariq-telemetry-stream",
     object_store: ObjectStoreSettings | None = None,
     master: str | None = None,
+    extra_config: dict[str, str] | None = None,
 ) -> SparkSession:
     """Build the SparkSession used by the streaming job.
 
     `object_store` is optional so unit tests can run without MinIO credentials.
-    When omitted, S3A is simply not configured.
+    When omitted, S3A is simply not configured. `extra_config` allows callers
+    (notably the test harness) to pin environment-specific Spark settings.
     """
     builder = SparkSession.builder.appName(app_name)
 
@@ -94,6 +96,9 @@ def create_spark_session(
         # Leaves the committed Parquet output free of _SUCCESS marker clutter.
         .config("spark.sql.streaming.forceDeleteTempCheckpointLocation", "false")
     )
+
+    for key, value in (extra_config or {}).items():
+        builder = builder.config(key, value)
 
     spark = builder.getOrCreate()
     spark.sparkContext.setLogLevel(os.getenv("SPARK_LOG_LEVEL", "WARN"))

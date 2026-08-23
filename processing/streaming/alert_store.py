@@ -148,14 +148,24 @@ class AlertOutcome:
     resolved: int
 
 
-def condition_rows(records: Sequence[Sequence[Any]]) -> list[tuple]:
+def condition_rows(
+    records: Sequence[Sequence[Any]], observed_at: datetime
+) -> list[tuple]:
     """Shape detected conditions into bind parameters for the condition upsert.
 
     Expects rows in CONDITION_COLUMNS order:
     (plant_id, inverter_id, alert_type, severity, message, loss_kw, observed_at).
+
+    The row's own `observed_at` is deliberately IGNORED in favour of the caller's
+    value. Collecting a Spark timestamp to Python yields a timezone-naive
+    datetime in the host's local zone; handing that to a TIMESTAMPTZ column would
+    store it shifted by the host's offset, while `ended_at` — taken from the
+    caller's timezone-aware value — would be stored correctly. The two would then
+    disagree, and a resolved alert could appear to end before it started. Keeping
+    one authoritative clock per batch removes the whole class of bug.
     """
     rows = []
-    for plant_id, inverter_id, alert_type, severity, message, loss_kw, observed_at in records:
+    for plant_id, inverter_id, alert_type, severity, message, loss_kw, _row_observed_at in records:
         rows.append(
             (
                 plant_id,
@@ -179,7 +189,7 @@ def reconcile_alerts(
     sustain_seconds: float,
 ) -> AlertOutcome:
     """Run the full alert lifecycle for one microbatch, inside the caller's transaction."""
-    rows = condition_rows(conditions)
+    rows = condition_rows(conditions, observed_at)
 
     # 1. Record what is currently wrong.
     execute_batch(conn, _UPSERT_CONDITION, rows)
