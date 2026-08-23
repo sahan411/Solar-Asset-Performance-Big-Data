@@ -1,4 +1,9 @@
-"""Local-Spark test fixtures for the SolarIQ processing subsystem.
+"""Shared test fixtures for the SolarIQ processing and batch subsystems.
+
+Lives at the tests root so both `tests/processing` (speed layer) and
+`tests/batch` (batch layer) can use the same SparkSession. The session fixture is
+lazy, so tests that never request it — including other members' API and
+integration tests — pay nothing for it.
 
 Spark needs three pieces of environment set correctly before the JVM starts, and
 getting them wrong produces confusing failures rather than clear ones:
