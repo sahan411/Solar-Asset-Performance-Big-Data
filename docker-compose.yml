@@ -1,0 +1,135 @@
+# SolarIQ local infrastructure.
+#
+# One command brings up everything the pipeline needs, reproducibly, on any
+# machine with Docker. `scripts/bootstrap.sh` wraps this with health waits and
+# topic creation.
+#
+# OWNERSHIP: the file belongs to Member 1, but `postgres` and `minio` exist for
+# Member 2's serving store and raw archive. Their service names, ports and
+# database name are taken from processing/common/config.py so his defaults
+# resolve without configuration. Member 2 should review them before relying on
+# them, and any change to a service name is a team-level change.
+#
+# No credential is hard-coded. Every secret is required from the environment
+# with `${VAR:?message}`, so Compose fails immediately with a readable error
+# rather than silently starting with a default password.
+
+name: solariq
+
+services:
+  # ---------------------------------------------------------------------------
+  # Kafka — the boundary between the simulator and everything downstream.
+  # ---------------------------------------------------------------------------
+  kafka:
+    # KRaft mode: no ZooKeeper. One less service, one less failure mode, and the
+    # direction Kafka itself has taken.
+    image: apache/kafka:3.8.1
+    container_name: solariq-kafka
+    ports:
+      # Only the external listener is published. Containers reach the broker on
+      # kafka:9092 over the internal network and do not need a host port.
+      - "29092:29092"
+    environment:
+      KAFKA_NODE_ID: 1
+      # Single node acting as both broker and controller. Correct for a local
+      # educational environment; a real deployment separates them.
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_INTER_BROKER_LISTENER_NAME: INTERNAL
+
+      # Two listeners, and this is the detail that most often goes wrong. A
+      # client connects once to bootstrap, then reconnects to the ADVERTISED
+      # address the broker hands back. One listener cannot serve both audiences:
+      # containers must be told "kafka:9092", the host must be told
+      # "localhost:29092", and giving either the other's address produces a
+      # connection that succeeds and then hangs.
+      KAFKA_LISTENERS: INTERNAL://0.0.0.0:9092,EXTERNAL://0.0.0.0:29092,CONTROLLER://0.0.0.0:9093
+      KAFKA_ADVERTISED_LISTENERS: INTERNAL://kafka:9092,EXTERNAL://localhost:29092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: INTERNAL:PLAINTEXT,EXTERNAL:PLAINTEXT,CONTROLLER:PLAINTEXT
+
+      # Single broker, so nothing can be replicated anywhere. Left at the
+      # default 3, the internal topics fail to create and the broker never
+      # becomes usable.
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      # No reason to wait for other consumers to join a group locally.
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+
+      # Deliberately off. With auto-creation on, a consumer that connects before
+      # create_topics.sh runs would silently create solar.telemetry.raw with ONE
+      # partition, and the 3-partition contract would be quietly lost — with no
+      # error anywhere, just less parallelism than the design assumes.
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
+
+      # Fixed cluster id, so a reset produces the same cluster rather than a new
+      # one each time. Not a secret: KRaft cluster ids are identifiers.
+      CLUSTER_ID: solariq-local-cluster-00
+    volumes:
+      - kafka-data:/var/lib/kafka/data
+    healthcheck:
+      # Asking the broker for its API versions is the cheapest call that proves
+      # it is actually serving, rather than merely listening on the port.
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:9092 >/dev/null 2>&1 || exit 1"]
+      interval: 10s
+      timeout: 10s
+      retries: 12
+      # Kafka needs a while to format storage and elect itself controller on a
+      # first run; without this the healthcheck fails before it ever could pass.
+      start_period: 40s
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------------------
+  # PostgreSQL — serving store (Member 2's migrations, Member 3's API reads).
+  # ---------------------------------------------------------------------------
+  postgres:
+    image: postgres:16.4-alpine
+    container_name: solariq-postgres
+    ports:
+      - "5432:5432"
+    environment:
+      # User and database name match the DATABASE_URL default in
+      # processing/common/config.py.
+      POSTGRES_USER: solariq
+      POSTGRES_DB: solariq
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env - see .env.example}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      # -U and -d matter: without them pg_isready checks the wrong database and
+      # can report ready before the application database exists.
+      test: ["CMD-SHELL", "pg_isready -U solariq -d solariq"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------------------
+  # MinIO — S3-compatible raw archive, the batch layer's source of truth.
+  # ---------------------------------------------------------------------------
+  minio:
+    image: minio/minio:RELEASE.2024-09-13T20-26-02Z
+    container_name: solariq-minio
+    command: server /data --console-address ":9001"
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ACCESS_KEY:?set MINIO_ACCESS_KEY in .env - see .env.example}
+      MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY:?set MINIO_SECRET_KEY in .env - see .env.example}
+    volumes:
+      - minio-data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "mc ready local || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+    restart: unless-stopped
+
+volumes:
+  kafka-data:
+  postgres-data:
+  minio-data:
