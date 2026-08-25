@@ -58,16 +58,22 @@ done
 
 if [[ "${CONSUME}" == true ]]; then
   echo
-  echo "=== ${MESSAGES} events from ${TELEMETRY_TOPIC} (newest tail) ==="
+  echo "=== first ${MESSAGES} events on ${TELEMETRY_TOPIC} ==="
+  # --from-beginning, deliberately. Without it the consumer waits for messages
+  # produced from now on, so this prints nothing whenever the simulator is not
+  # currently running — which looks like an empty topic even when the counts
+  # above just proved otherwise.
+  #
   # Keys are printed because "is the key plant_id:inverter_id?" is the other
-  # question worth answering here — a wrong key breaks per-inverter ordering.
+  # question worth answering here: a wrong key breaks per-inverter ordering.
   docker exec "${CONTAINER}" /opt/kafka/bin/kafka-console-consumer.sh \
     --bootstrap-server "${BOOTSTRAP}" \
     --topic "${TELEMETRY_TOPIC}" \
+    --from-beginning \
     --max-messages "${MESSAGES}" \
     --property print.key=true \
     --property key.separator=' | ' \
     --timeout-ms 15000 2>/dev/null \
     | sed 's/^/  /' \
-    || echo "  (no messages within 15s — is the simulator running?)"
+    || echo "  (topic is empty — has the simulator ever run?)"
 fi

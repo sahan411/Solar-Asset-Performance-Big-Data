@@ -4,8 +4,9 @@
 # both subsystems use the same library, so the two can share one virtualenv
 # during local integration without pip resolving a different build for each.
 #
-# This file grows as the ingestion milestones land: the Kafka client and the
-# Prometheus client arrive with milestones 6 and 9.
+# The Kafka client is pinned to a 2.x build matching the broker line in
+# docker-compose.yml (Apache Kafka 3.8); the protocol is backward compatible,
+# but keeping them in step avoids surprises with idempotent-producer support.
 
 # Shared portfolio configuration (plants/inverters).
 PyYAML==6.0.2
@@ -13,3 +14,11 @@ PyYAML==6.0.2
 # Telemetry contract validation at the Kafka boundary. The schema itself lives
 # in contracts/telemetry.schema.json and is shared with the whole team.
 jsonschema==4.23.0
+
+# Kafka producer. librdkafka underneath, which is what gives us idempotent
+# delivery and a real delivery callback rather than fire-and-forget.
+confluent-kafka==2.6.0
+
+# Prometheus metrics endpoint. Same pin as processing/requirements.txt so the
+# two subsystems can share one virtualenv during local integration.
+prometheus-client==0.21.0

@@ -1,0 +1,45 @@
+# Prometheus scrape configuration for SolarIQ.
+#
+# The simulator normally runs on the HOST (it is a Python process, not a
+# container), while Prometheus runs inside Compose. `host.docker.internal` is
+# how a container reaches the host on Docker Desktop; a plain `localhost` here
+# would resolve to the Prometheus container itself and scrape nothing.
+#
+# The `extra_hosts` entry in docker-compose.yml keeps that name working on Linux
+# too, where Docker does not provide it by default.
+
+global:
+  # A simulated day is 300 real seconds, so 15s gives roughly twenty samples per
+  # simulated day - enough to see a fault appear and clear within one demo.
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  external_labels:
+    project: solariq
+
+rule_files:
+  - /etc/prometheus/rules/*.yml
+
+scrape_configs:
+  # Prometheus watching itself: if this target is down, no other target's
+  # "up == 0" can be trusted either.
+  - job_name: prometheus
+    static_configs:
+      - targets: ["localhost:9090"]
+
+  # Member 1: the telemetry producer.
+  - job_name: solariq-simulator
+    static_configs:
+      - targets: ["host.docker.internal:9101"]
+        labels:
+          subsystem: ingestion
+          owner: member-1
+
+  # Member 2: Spark stream-processing health. Declared now so the target shows
+  # as DOWN rather than being invisible - a missing exporter and a broken one
+  # look identical if nobody is looking for it.
+  - job_name: solariq-processing
+    static_configs:
+      - targets: ["host.docker.internal:9102"]
+        labels:
+          subsystem: processing
+          owner: member-2

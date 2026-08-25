@@ -1,0 +1,86 @@
+# SolarIQ pipeline-health alerts.
+#
+# These are ENGINEERING alerts: they fire when the platform stops working. They
+# are deliberately separate from the operational/business alerts Member 2 raises
+# from the telemetry itself (an underperforming inverter, a plant offline).
+#
+# The distinction matters and is worth stating in a viva. "PLANT_04/INV_01 is
+# producing nothing" is a fact about a solar farm, and someone drives out to fix
+# a panel. "We have received no telemetry for a minute" is a fact about the
+# pipeline, and someone restarts a service. Conflating them means an outage in
+# the monitoring system looks exactly like an outage in the plant - which is the
+# single most dangerous failure mode a monitoring platform has, because it
+# reports "everything is zero" with total confidence.
+
+groups:
+  - name: solariq-pipeline
+    rules:
+      # The core liveness check. solariq_last_event_timestamp_seconds carries
+      # REAL unix time, deliberately, so `time() - metric` is a true staleness
+      # measure. Exporting simulated time would make it advance 288x and never
+      # look stale.
+      - alert: SolarIQNoTelemetryProduced
+        expr: time() - solariq_last_event_timestamp_seconds > 60
+        # Long enough to survive a single missed scrape, short enough to fire
+        # inside a five-minute demo.
+        for: 15s
+        labels:
+          severity: critical
+          subsystem: ingestion
+          owner: member-1
+        annotations:
+          summary: "SolarIQ telemetry producer is stale"
+          description: >-
+            No telemetry has been published for over 60s. The dashboard will be
+            serving increasingly old data while continuing to look healthy.
+            Check the simulator process and the Kafka broker.
+
+      # The exporter being gone is worse than it being stale: the staleness rule
+      # above cannot fire at all if the metric has stopped being scraped, so
+      # without this an absent simulator would be silent.
+      - alert: SolarIQSimulatorDown
+        expr: up{job="solariq-simulator"} == 0
+        for: 30s
+        labels:
+          severity: critical
+          subsystem: ingestion
+          owner: member-1
+        annotations:
+          summary: "SolarIQ simulator is not being scraped"
+          description: >-
+            Prometheus cannot reach the simulator's metrics endpoint. The
+            no-telemetry rule cannot fire while this is true, so this alert is
+            what covers a simulator that has died outright.
+
+      # Delivery failures mean events the rest of the pipeline will never see.
+      # A rate rather than a total: a handful of retries during broker startup
+      # is normal, sustained failure is not.
+      - alert: SolarIQProducerDeliveryFailures
+        expr: rate(solariq_producer_failures_total[1m]) > 0
+        for: 30s
+        labels:
+          severity: warning
+          subsystem: ingestion
+          owner: member-1
+        annotations:
+          summary: "SolarIQ producer is failing to deliver to Kafka"
+          description: >-
+            Events are being generated but not accepted by Kafka. Data is being
+            lost silently from the consumer's point of view.
+
+      # Source-side quarantine. Under normal demo settings this should be flat
+      # at zero: the simulator only emits invalid events when
+      # SIMULATION_EMIT_INVALID_EVENTS is deliberately switched on.
+      - alert: SolarIQInvalidEventsProduced
+        expr: rate(solariq_events_invalid_total[1m]) > 0
+        for: 1m
+        labels:
+          severity: warning
+          subsystem: ingestion
+          owner: member-1
+        annotations:
+          summary: "SolarIQ is quarantining telemetry at the source"
+          description: >-
+            Events are failing validation before publication. Either the
+            invalid-event test mode is enabled, or the generation model has
+            started producing readings outside the frozen contract.

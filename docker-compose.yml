@@ -129,7 +129,41 @@ services:
       start_period: 20s
     restart: unless-stopped
 
+  # ---------------------------------------------------------------------------
+  # Prometheus — pipeline health, and the source of the required health alert.
+  # ---------------------------------------------------------------------------
+  prometheus:
+    image: prom/prometheus:v2.54.1
+    container_name: solariq-prometheus
+    ports:
+      - "9090:9090"
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      # Enables the reload endpoint, so an edited alert rule can be applied with
+      # a POST instead of restarting the container mid-demo.
+      - --web.enable-lifecycle
+    volumes:
+      # Read-only: Prometheus has no reason to write to its own config, and a
+      # container that cannot modify its inputs is one less thing to debug.
+      - ./observability/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./observability/alert-rules:/etc/prometheus/rules:ro
+      - prometheus-data:/prometheus
+    extra_hosts:
+      # The simulator runs on the host, not in Compose. Docker Desktop provides
+      # host.docker.internal automatically; Linux does not, and this line makes
+      # the same config work on both.
+      - "host.docker.internal:host-gateway"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://localhost:9090/-/healthy || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    restart: unless-stopped
+
 volumes:
   kafka-data:
   postgres-data:
   minio-data:
+  prometheus-data:
