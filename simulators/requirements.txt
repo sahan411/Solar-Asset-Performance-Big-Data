@@ -1,0 +1,11 @@
+# SolarIQ — Member 1 (simulators) runtime dependencies.
+#
+# Versions are pinned and kept identical to processing/requirements.txt wherever
+# both subsystems use the same library, so the two can share one virtualenv
+# during local integration without pip resolving a different build for each.
+#
+# This file grows as the ingestion milestones land: the Kafka client and the
+# Prometheus client arrive with milestones 6 and 9.
+
+# Shared portfolio configuration (plants/inverters).
+PyYAML==6.0.2
