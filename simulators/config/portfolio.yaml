@@ -1,0 +1,135 @@
+# SolarIQ simulated portfolio — the single definition of which assets exist.
+#
+# Two independent consumers read this one file, which is the point: Member 1's
+# simulator generates telemetry from it, and Member 2's storage/seed_portfolio.py
+# seeds the `plants` and `inverters` tables from it. Asset identity therefore
+# cannot drift between the live stream and the database.
+#
+# Every plant here is fictional. Names, capacities and layouts are invented for a
+# university demonstration and do not describe any real site or customer.
+#
+# Contract and validation rules: docs/data-contracts.md, section 1.
+# Scale required by the master specification: 5 plants, 5-10 inverters each.
+#
+# Three assets are deliberately reserved as the deterministic anomaly targets for
+# the assessment demo (see docs/data-contracts.md, section 7). Renaming or
+# removing them breaks the demo timeline:
+#
+#   PLANT_03 / INV_02   underperformance
+#   PLANT_04 / INV_01   inverter offline
+#   PLANT_05            telemetry gap
+#
+# A plant's inverter ratings sum exactly to its nameplate capacity. Real sites
+# usually oversize the DC array against inverter capacity; that ratio is modelled
+# in the generation curve rather than here, so this file stays easy to check by
+# eye.
+
+plants:
+  # 6 x 1000 kW = 6000 kW. The portfolio's largest site.
+  - id: PLANT_01
+    name: North Ridge Solar
+    capacity_kw: 6000
+    timezone: UTC
+    inverters:
+      - id: INV_01
+        rated_power_kw: 1000
+      - id: INV_02
+        rated_power_kw: 1000
+      - id: INV_03
+        rated_power_kw: 1000
+      - id: INV_04
+        rated_power_kw: 1000
+      - id: INV_05
+        rated_power_kw: 1000
+      - id: INV_06
+        rated_power_kw: 1000
+
+  # 5 x 800 kW = 4000 kW. Fewest inverters allowed by the specification.
+  - id: PLANT_02
+    name: East Field Solar
+    capacity_kw: 4000
+    timezone: UTC
+    inverters:
+      - id: INV_01
+        rated_power_kw: 800
+      - id: INV_02
+        rated_power_kw: 800
+      - id: INV_03
+        rated_power_kw: 800
+      - id: INV_04
+        rated_power_kw: 800
+      - id: INV_05
+        rated_power_kw: 800
+
+  # 8 x 500 kW = 4000 kW. Same capacity as PLANT_02 but split across more, smaller
+  # inverters — so losing one unit costs 12.5% here against 20% there. That makes
+  # the underperformance scenario a realistic partial loss rather than an obvious
+  # collapse, which is what Member 2's detection rule has to catch.
+  - id: PLANT_03
+    name: Harbour Flats Solar
+    capacity_kw: 4000
+    timezone: UTC
+    inverters:
+      - id: INV_01
+        rated_power_kw: 500
+      - id: INV_02          # demo target: INV_UNDERPERFORMANCE
+        rated_power_kw: 500
+      - id: INV_03
+        rated_power_kw: 500
+      - id: INV_04
+        rated_power_kw: 500
+      - id: INV_05
+        rated_power_kw: 500
+      - id: INV_06
+        rated_power_kw: 500
+      - id: INV_07
+        rated_power_kw: 500
+      - id: INV_08
+        rated_power_kw: 500
+
+  # 6 x 750 kW = 4500 kW.
+  - id: PLANT_04
+    name: Windmere Plains Solar
+    capacity_kw: 4500
+    timezone: UTC
+    inverters:
+      - id: INV_01          # demo target: INV_OFFLINE
+        rated_power_kw: 750
+      - id: INV_02
+        rated_power_kw: 750
+      - id: INV_03
+        rated_power_kw: 750
+      - id: INV_04
+        rated_power_kw: 750
+      - id: INV_05
+        rated_power_kw: 750
+      - id: INV_06
+        rated_power_kw: 750
+
+  # 10 x 250 kW = 2500 kW. Most inverters allowed, smallest units: the whole site
+  # goes silent during TELEMETRY_GAP, so a gap is visible at plant level.
+  - id: PLANT_05
+    name: Southgate Solar
+    capacity_kw: 2500
+    timezone: UTC
+    inverters:
+      - id: INV_01
+        rated_power_kw: 250
+      - id: INV_02
+        rated_power_kw: 250
+      - id: INV_03
+        rated_power_kw: 250
+      - id: INV_04
+        rated_power_kw: 250
+      - id: INV_05
+        rated_power_kw: 250
+      - id: INV_06
+        rated_power_kw: 250
+      - id: INV_07
+        rated_power_kw: 250
+      - id: INV_08
+        rated_power_kw: 250
+      - id: INV_09
+        rated_power_kw: 250
+      - id: INV_10
+        rated_power_kw: 250
