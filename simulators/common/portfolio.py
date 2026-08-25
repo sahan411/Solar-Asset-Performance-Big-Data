@@ -28,6 +28,8 @@ from typing import Any
 
 import yaml
 
+from simulators.common.config import ConfigError
+
 # Repository-relative location of the real portfolio. Callers that read
 # PORTFOLIO_CONFIG_PATH from the environment should pass an explicit path
 # instead of relying on this.
@@ -44,8 +46,12 @@ MAX_INVERTERS_PER_PLANT = 10
 CAPACITY_TOLERANCE = 0.25
 
 
-class PortfolioConfigError(ValueError):
-    """Raised when the portfolio config cannot be trusted."""
+class PortfolioConfigError(ConfigError):
+    """Raised when the portfolio config cannot be trusted.
+
+    A ConfigError subclass so a simulator entrypoint can catch every startup
+    configuration fault — environment and portfolio file alike — in one place.
+    """
 
 
 @dataclass(frozen=True)
