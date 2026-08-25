@@ -9,3 +9,7 @@
 
 # Shared portfolio configuration (plants/inverters).
 PyYAML==6.0.2
+
+# Telemetry contract validation at the Kafka boundary. The schema itself lives
+# in contracts/telemetry.schema.json and is shared with the whole team.
+jsonschema==4.23.0
