@@ -89,6 +89,35 @@ class PlantSummary:
             self.maintenance_flag,
         )
 
+    def to_dict(self) -> dict:
+        """JSON-safe form, for passing between Airflow tasks through XCom.
+
+        XCom serialises to JSON, which has no date type, so the date is rendered
+        as an ISO string and restored by `from_dict`.
+        """
+        return {
+            "simulation_date": self.simulation_date.isoformat(),
+            "plant_id": self.plant_id,
+            "actual_generation_kwh": self.actual_generation_kwh,
+            "expected_generation_kwh": self.expected_generation_kwh,
+            "performance_pct": self.performance_pct,
+            "availability_pct": self.availability_pct,
+            "downtime_minutes": self.downtime_minutes,
+            "estimated_lost_energy_kwh": self.estimated_lost_energy_kwh,
+            "ppa_rate_per_kwh": self.ppa_rate_per_kwh,
+            "estimated_actual_revenue": self.estimated_actual_revenue,
+            "estimated_lost_revenue": self.estimated_lost_revenue,
+            "alert_count": self.alert_count,
+            "maintenance_flag": self.maintenance_flag,
+        }
+
+    @staticmethod
+    def from_dict(payload: dict) -> "PlantSummary":
+        """Rebuild from `to_dict` output."""
+        fields = dict(payload)
+        fields["simulation_date"] = date.fromisoformat(fields["simulation_date"])
+        return PlantSummary(**fields)
+
 
 @dataclass
 class ReconciliationResult:
