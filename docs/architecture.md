@@ -285,8 +285,6 @@ processed timestamp notices.
 
 ## 6. Batch layer calculations
 
-*(Milestones 10–13; this section is completed as those land.)*
-
 ### 6.1 Why the archive exists
 
 The batch layer reads the immutable Parquet archive, **not** the live tables.
