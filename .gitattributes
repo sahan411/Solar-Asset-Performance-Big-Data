@@ -1,0 +1,29 @@
+# Line-ending policy.
+#
+# The whole team is on Windows, where Git converts LF to CRLF on checkout by
+# default. That is harmless for Python, but fatal for anything a Linux container
+# executes: a shell script with CRLF endings fails with
+#
+#     /bin/bash^M: bad interpreter: No such file or directory
+#
+# which reads like a missing file rather than a line-ending problem and costs an
+# afternoon to diagnose. Anything that runs inside a container, or is parsed by
+# one, is pinned to LF here regardless of platform.
+
+* text=auto
+
+*.sh        text eol=lf
+*.yml       text eol=lf
+*.yaml      text eol=lf
+Dockerfile  text eol=lf
+*.env       text eol=lf
+*.sql       text eol=lf
+
+# Windows-native scripts keep CRLF; cmd.exe requires it.
+*.bat       text eol=crlf
+*.ps1       text eol=crlf
+
+# Never touched: a byte changed here corrupts the file.
+*.png       binary
+*.jpg       binary
+*.parquet   binary

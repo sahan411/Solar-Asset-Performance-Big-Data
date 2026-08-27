@@ -1,0 +1,71 @@
+# SolarIQ deterministic anomaly timeline.
+#
+# This file is the script for the assessment demo. Nothing about the faults is
+# random: the same windows fire on the same assets at the same points of every
+# simulated day, so the examiner sees an identical run every time and a rehearsal
+# is worth something.
+#
+# Windows are positions within a SIMULATED DAY, measured in real seconds from
+# simulated midnight, and they repeat each simulated day. They are written
+# against the `reference_day_seconds` below and scaled automatically if
+# SIMULATION_DAY_SECONDS differs, so speeding the clock up or down moves the
+# whole narrative with it instead of silently pushing anomalies off the end.
+#
+# Targets must exist in simulators/config/portfolio.yaml — the loader checks, so
+# renaming a plant fails at startup rather than during the demo.
+#
+# Scenario behaviour (see docs/data-contracts.md section 7):
+#
+#   INV_UNDERPERFORMANCE  power scaled by power_factor, status WARNING.
+#                         Irradiance is left alone on purpose: the detection rule
+#                         must notice output falling while the resource is fine.
+#                         Scaling irradiance too would make the plant merely
+#                         cloudy, which is not a fault.
+#   INV_OFFLINE           power 0, availability 0, status OFFLINE. A REPORTED
+#                         zero — the asset is down and says so.
+#   TELEMETRY_GAP         no events published at all. SILENCE, which is a
+#                         different failure: we have lost visibility and cannot
+#                         tell "fine" from "on fire". Drives a pipeline-health
+#                         alert rather than an operational one.
+#   RECOVERY              readings return to normal; the label marks the asset as
+#                         having just come back, so the demo narrative is legible
+#                         in the raw event stream.
+
+reference_day_seconds: 300
+
+windows:
+  # --- 0-90s: no window. Baseline generation, no alerts. ---
+
+  # Partial loss on one of eight inverters at Harbour Flats: 12.5% of the site.
+  # Deliberately not catastrophic, so the detection rule has to actually work.
+  - scenario: INV_UNDERPERFORMANCE
+    start_second: 90
+    end_second: 150
+    plant_id: PLANT_03
+    inverter_id: INV_02
+    power_factor: 0.45
+
+  - scenario: RECOVERY
+    start_second: 150
+    end_second: 190
+    plant_id: PLANT_03
+    inverter_id: INV_02
+
+  # A reported zero: the inverter is down and is telling us so.
+  - scenario: INV_OFFLINE
+    start_second: 190
+    end_second: 235
+    plant_id: PLANT_04
+    inverter_id: INV_01
+
+  # Silence, not a zero. No inverter_id, so the whole site stops publishing and
+  # the gap is visible at plant level.
+  - scenario: TELEMETRY_GAP
+    start_second: 235
+    end_second: 260
+    plant_id: PLANT_05
+
+  - scenario: RECOVERY
+    start_second: 260
+    end_second: 300
+    plant_id: PLANT_05

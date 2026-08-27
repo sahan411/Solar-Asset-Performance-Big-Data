@@ -74,6 +74,10 @@ class Plant:
     capacity_kw: float
     timezone: str
     inverters: tuple[Inverter, ...]
+    # Fictional commercial rate per kWh, used by the daily reference feed to
+    # value expected generation. None means "use the portfolio default", so a
+    # plant only appears here when it deliberately differs.
+    ppa_rate_per_kwh: float | None = None
 
     @property
     def inverter_capacity_kw(self) -> float:
@@ -170,12 +174,18 @@ def _parse_plant(raw: Any) -> Plant:
             raise PortfolioConfigError(f"{context}: duplicate inverter id {inverter.id!r}.")
         seen.add(inverter.id)
 
+    raw_rate = raw.get("ppa_rate_per_kwh")
     plant = Plant(
         id=plant_id,
         name=_required_text(raw.get("name"), "name", context),
         capacity_kw=_positive_float(raw.get("capacity_kw"), "capacity_kw", context),
         timezone=str(raw.get("timezone") or "UTC").strip(),
         inverters=inverters,
+        ppa_rate_per_kwh=(
+            _positive_float(raw_rate, "ppa_rate_per_kwh", context)
+            if raw_rate is not None
+            else None
+        ),
     )
 
     drift = abs(plant.inverter_capacity_kw - plant.capacity_kw) / plant.capacity_kw
