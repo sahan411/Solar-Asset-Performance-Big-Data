@@ -19,6 +19,11 @@
 #   PLANT_04 / INV_01   inverter offline
 #   PLANT_05            telemetry gap
 #
+# ppa_rate_per_kwh is the fictional commercial rate the daily reference feed
+# values expected generation at. Rates differ per plant so lost revenue during
+# an outage is not simply proportional to lost energy, which makes the revenue
+# reconciliation worth looking at. These are invented, not real tariffs.
+#
 # A plant's inverter ratings sum exactly to its nameplate capacity. Real sites
 # usually oversize the DC array against inverter capacity; that ratio is modelled
 # in the generation curve rather than here, so this file stays easy to check by
@@ -30,6 +35,7 @@ plants:
     name: North Ridge Solar
     capacity_kw: 6000
     timezone: UTC
+    ppa_rate_per_kwh: 0.081  # long-term utility offtake, lowest rate
     inverters:
       - id: INV_01
         rated_power_kw: 1000
@@ -49,6 +55,7 @@ plants:
     name: East Field Solar
     capacity_kw: 4000
     timezone: UTC
+    ppa_rate_per_kwh: 0.094  # commercial offtaker
     inverters:
       - id: INV_01
         rated_power_kw: 800
@@ -69,6 +76,7 @@ plants:
     name: Harbour Flats Solar
     capacity_kw: 4000
     timezone: UTC
+    ppa_rate_per_kwh: 0.088
     inverters:
       - id: INV_01
         rated_power_kw: 500
@@ -92,6 +100,7 @@ plants:
     name: Windmere Plains Solar
     capacity_kw: 4500
     timezone: UTC
+    ppa_rate_per_kwh: 0.079  # oldest contract in the portfolio
     inverters:
       - id: INV_01          # demo target: INV_OFFLINE
         rated_power_kw: 750
@@ -112,6 +121,7 @@ plants:
     name: Southgate Solar
     capacity_kw: 2500
     timezone: UTC
+    ppa_rate_per_kwh: 0.112  # small site on a premium retail tariff
     inverters:
       - id: INV_01
         rated_power_kw: 250

@@ -15,19 +15,28 @@ import pytest
 from simulators.common.logging import JsonLogFormatter, get_logger
 
 
-@pytest.fixture(autouse=True)
-def reset_loggers():
-    """Drop handlers between tests.
-
-    get_logger caches by name on the global logging registry, so without this a
-    logger built in one test leaks its handler into the next.
-    """
-    yield
+def _clear_solariq_loggers() -> None:
     manager = logging.Logger.manager
     for name in [n for n in manager.loggerDict if n.startswith("solariq.")]:
         logger = logging.getLogger(name)
         logger.handlers.clear()
         logger.setLevel(logging.NOTSET)
+
+
+@pytest.fixture(autouse=True)
+def reset_loggers():
+    """Drop handlers before AND after each test.
+
+    get_logger caches by name on the global logging registry and attaches a
+    StreamHandler bound to whatever `sys.stdout` was at the time. Modules such as
+    simulators.streaming.simulator call get_logger at import, so by the time
+    these tests run a handler may already exist pointing at the real stdout —
+    and capsys, which swaps sys.stdout afterwards, would capture nothing.
+    Clearing first forces get_logger to rebind to the captured stream.
+    """
+    _clear_solariq_loggers()
+    yield
+    _clear_solariq_loggers()
 
 
 def emitted(capsys) -> list[dict]:
