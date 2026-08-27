@@ -1,0 +1,97 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://solariq.example/contracts/telemetry.schema.json",
+  "title": "SolarIQ streaming telemetry event",
+  "description": "One inverter's readings at one simulated instant, as published to solar.telemetry.raw. Frozen shared contract: master specification section 9.1 and docs/data-contracts.md section 2. Bounds here are deliberately at least as strict as Member 2's boundary validation in processing/streaming/validation.py, so anything this schema accepts is accepted downstream.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "event_id",
+    "plant_id",
+    "inverter_id",
+    "active_power_kw",
+    "energy_today_kwh",
+    "irradiance_wm2",
+    "module_temp_c",
+    "inverter_temp_c",
+    "status",
+    "availability",
+    "timestamp",
+    "simulator_scenario"
+  ],
+  "properties": {
+    "event_id": {
+      "description": "Unique identifier for this event. Member 2 de-duplicates on it, so it must be stable across producer retries of the same reading.",
+      "type": "string",
+      "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+    },
+    "plant_id": {
+      "description": "Plant identifier, matching simulators/config/portfolio.yaml.",
+      "type": "string",
+      "pattern": "^[A-Z][A-Z0-9_]*$",
+      "minLength": 1,
+      "maxLength": 64
+    },
+    "inverter_id": {
+      "description": "Inverter identifier, unique within its plant.",
+      "type": "string",
+      "pattern": "^[A-Z][A-Z0-9_]*$",
+      "minLength": 1,
+      "maxLength": 64
+    },
+    "active_power_kw": {
+      "description": "Instantaneous AC output. Never negative; the event builder also enforces the inverter's nameplate rating as an upper bound, which this schema cannot express because the rating is per asset.",
+      "type": "number",
+      "minimum": 0
+    },
+    "energy_today_kwh": {
+      "description": "Cumulative generation since the start of the simulated day. Integrated from power, never decreasing within a day, reset at the day boundary.",
+      "type": "number",
+      "minimum": 0
+    },
+    "irradiance_wm2": {
+      "description": "Plane-of-array irradiance. Clear-sky peak is 1000 W/m^2; the ceiling matches MAX_PLAUSIBLE_IRRADIANCE_WM2 in Member 2's validator, which allows headroom for cloud-edge enhancement.",
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1500
+    },
+    "module_temp_c": {
+      "description": "PV module temperature. Runs hotter than ambient in sun.",
+      "type": "number",
+      "minimum": -50,
+      "maximum": 120
+    },
+    "inverter_temp_c": {
+      "description": "Inverter cabinet temperature.",
+      "type": "number",
+      "minimum": -50,
+      "maximum": 120
+    },
+    "status": {
+      "description": "Operational state. WARNING accompanies degraded output; OFFLINE means the asset reports no generation at all.",
+      "type": "string",
+      "enum": ["ONLINE", "OFFLINE", "WARNING"]
+    },
+    "availability": {
+      "description": "Event-level availability flag: exactly 0 or 1. Member 2 accepts any value in [0, 1], but the frozen contract specifies a flag, so the producer emits only the two endpoints.",
+      "type": "number",
+      "enum": [0, 1]
+    },
+    "timestamp": {
+      "description": "Event time in UTC, ISO 8601 with a Z suffix and second precision. This is SIMULATED time, not wall-clock time: a simulated day spans a full 24 hours here however few real seconds it is compressed into. Every downstream window depends on that.",
+      "type": "string",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"
+    },
+    "simulator_scenario": {
+      "description": "Name of the active demo anomaly, or null during normal operation. DEMO METADATA ONLY. No detection logic may read this field: the pipeline must infer faults from the physical readings, or it proves nothing.",
+      "type": ["string", "null"],
+      "enum": [
+        null,
+        "INV_UNDERPERFORMANCE",
+        "INV_OFFLINE",
+        "TELEMETRY_GAP",
+        "RECOVERY"
+      ]
+    }
+  }
+}
