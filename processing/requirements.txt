@@ -1,0 +1,21 @@
+# SolarIQ — Member 2 (processing) runtime dependencies.
+#
+# Spark version is pinned deliberately. Spark 3.5.x ships with Hadoop 3.3.4,
+# which fixes the compatible S3A/Kafka connector artifacts used for the MinIO
+# raw archive and the Kafka source. Do not bump Spark without also re-checking
+# the jar coordinates documented in processing/streaming/README.md.
+pyspark==3.5.3
+
+# PostgreSQL serving-store access (migrations, stream sink, batch sink).
+# psycopg2 is used rather than psycopg3 because Airflow's Postgres provider
+# depends on it, so the container images share a single driver.
+psycopg2-binary==2.9.9
+
+# Daily reference feed parsing/validation in the batch layer.
+pandas==2.2.3
+
+# Shared portfolio configuration (plants/inverters) for idempotent seeds.
+PyYAML==6.0.2
+
+# Stream-processing health metrics scraped by Prometheus.
+prometheus-client==0.21.0
