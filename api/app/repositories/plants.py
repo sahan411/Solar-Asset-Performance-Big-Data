@@ -9,10 +9,10 @@ from app.db import dict_cursor
 
 _LIST_PLANTS_WITH_LATEST = """
     SELECT p.id, p.name, p.capacity_kw, p.active,
-           m.current_power_kw, m.performance_pct, m.window_end AS last_update
+           m.current_power_kw, m.performance_pct, m.availability_pct, m.window_end AS last_update
       FROM plants p
       LEFT JOIN LATERAL (
-          SELECT current_power_kw, performance_pct, window_end
+          SELECT current_power_kw, performance_pct, availability_pct, window_end
             FROM live_plant_metrics lpm
            WHERE lpm.plant_id = p.id
            ORDER BY lpm.window_end DESC

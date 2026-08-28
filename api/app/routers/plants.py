@@ -34,6 +34,7 @@ def list_plants(
             active=row["active"],
             current_power_kw=row["current_power_kw"],
             performance_pct=row["performance_pct"],
+            availability_pct=row["availability_pct"],
             data_status=data_status(row["last_update"], settings.stale_data_seconds)
             if row["last_update"] is not None
             else "NO_DATA",
