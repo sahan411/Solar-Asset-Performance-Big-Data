@@ -1,0 +1,367 @@
+/* SolarIQ operations dashboard — one restrained, functional design system.
+   No gradients, no heavy shadows, no decorative imagery: the point is that an
+   evaluator can read a KPI at a glance during a 10-minute demo. */
+
+:root {
+  --color-bg: #f5f6f8;
+  --color-surface: #ffffff;
+  --color-border: #dde1e6;
+  --color-text: #1a1d23;
+  --color-text-muted: #5b6270;
+  --color-accent: #1f6feb;
+  --color-accent-muted: #e8f0fe;
+
+  --color-live: #1a7f37;
+  --color-live-bg: #e6f4ea;
+  --color-stale: #9a6700;
+  --color-stale-bg: #fff3d6;
+  --color-nodata: #5b6270;
+  --color-nodata-bg: #eceef1;
+
+  --color-warning: #9a6700;
+  --color-warning-bg: #fff3d6;
+  --color-critical: #b3261e;
+  --color-critical-bg: #fdeceb;
+
+  --color-active: #b3261e;
+  --color-active-bg: #fdeceb;
+  --color-resolved: #1a7f37;
+  --color-resolved-bg: #e6f4ea;
+
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
+
+  --radius: 6px;
+  --font-sans: -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  --font-mono: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--color-bg);
+  color: var(--color-text);
+  font-family: var(--font-sans);
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+h1,
+h2,
+h3 {
+  margin: 0 0 var(--space-2) 0;
+  font-weight: 600;
+}
+
+h1 {
+  font-size: 20px;
+}
+
+h2 {
+  font-size: 16px;
+}
+
+a {
+  color: var(--color-accent);
+  text-decoration: none;
+}
+
+a:hover {
+  text-decoration: underline;
+}
+
+/* ---------------------------------------------------------------------- */
+/* Layout                                                                  */
+/* ---------------------------------------------------------------------- */
+
+.app-shell {
+  display: flex;
+  flex-direction: column;
+  min-height: 100%;
+}
+
+.app-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--space-3) var(--space-5);
+  background: var(--color-surface);
+  border-bottom: 1px solid var(--color-border);
+  flex-wrap: wrap;
+  gap: var(--space-3);
+}
+
+.app-title {
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--color-text);
+}
+
+.app-nav {
+  display: flex;
+  gap: var(--space-4);
+}
+
+.app-nav a {
+  color: var(--color-text-muted);
+  font-weight: 500;
+  padding: var(--space-2) 0;
+  border-bottom: 2px solid transparent;
+}
+
+.app-nav a.active,
+.app-nav a:hover {
+  color: var(--color-text);
+  text-decoration: none;
+  border-bottom-color: var(--color-accent);
+}
+
+.app-main {
+  flex: 1;
+  padding: var(--space-5);
+  max-width: 1280px;
+  width: 100%;
+  margin: 0 auto;
+}
+
+.section {
+  margin-bottom: var(--space-6);
+}
+
+.section__header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-3);
+  margin-bottom: var(--space-3);
+  flex-wrap: wrap;
+}
+
+/* ---------------------------------------------------------------------- */
+/* KPI cards                                                              */
+/* ---------------------------------------------------------------------- */
+
+.kpi-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: var(--space-3);
+}
+
+.kpi-card {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  padding: var(--space-4);
+}
+
+.kpi-card--warning {
+  border-color: var(--color-warning);
+}
+
+.kpi-card--critical {
+  border-color: var(--color-critical);
+}
+
+.kpi-card__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+.kpi-card__label {
+  color: var(--color-text-muted);
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.kpi-card__value {
+  font-size: 24px;
+  font-weight: 700;
+  margin-top: var(--space-1);
+  font-variant-numeric: tabular-nums;
+}
+
+.kpi-card__sublabel {
+  color: var(--color-text-muted);
+  font-size: 12px;
+  margin-top: var(--space-1);
+}
+
+/* ---------------------------------------------------------------------- */
+/* Badges                                                                  */
+/* ---------------------------------------------------------------------- */
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px var(--space-2);
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  white-space: nowrap;
+}
+
+.badge--live {
+  color: var(--color-live);
+  background: var(--color-live-bg);
+}
+
+.badge--stale {
+  color: var(--color-stale);
+  background: var(--color-stale-bg);
+}
+
+.badge--no_data {
+  color: var(--color-nodata);
+  background: var(--color-nodata-bg);
+}
+
+.badge--warning {
+  color: var(--color-warning);
+  background: var(--color-warning-bg);
+}
+
+.badge--critical {
+  color: var(--color-critical);
+  background: var(--color-critical-bg);
+}
+
+.badge--active {
+  color: var(--color-active);
+  background: var(--color-active-bg);
+}
+
+.badge--resolved {
+  color: var(--color-resolved);
+  background: var(--color-resolved-bg);
+}
+
+/* ---------------------------------------------------------------------- */
+/* Tables                                                                  */
+/* ---------------------------------------------------------------------- */
+
+.table-wrap {
+  overflow-x: auto;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+th,
+td {
+  text-align: left;
+  padding: var(--space-2) var(--space-3);
+  border-bottom: 1px solid var(--color-border);
+  white-space: nowrap;
+}
+
+th {
+  color: var(--color-text-muted);
+  font-weight: 600;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+tbody tr:last-child td {
+  border-bottom: none;
+}
+
+tbody tr:hover {
+  background: var(--color-accent-muted);
+}
+
+/* ---------------------------------------------------------------------- */
+/* Panels / cards                                                          */
+/* ---------------------------------------------------------------------- */
+
+.panel {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  padding: var(--space-4);
+}
+
+/* ---------------------------------------------------------------------- */
+/* Data states                                                             */
+/* ---------------------------------------------------------------------- */
+
+.data-state {
+  padding: var(--space-4);
+  text-align: center;
+  color: var(--color-text-muted);
+  font-size: 13px;
+}
+
+.data-state--error {
+  color: var(--color-critical);
+}
+
+.data-state--error .button {
+  margin-top: var(--space-2);
+}
+
+/* ---------------------------------------------------------------------- */
+/* Forms / controls                                                       */
+/* ---------------------------------------------------------------------- */
+
+.button,
+select,
+input[type="date"] {
+  font-family: inherit;
+  font-size: 13px;
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius);
+  border: 1px solid var(--color-border);
+  background: var(--color-surface);
+  color: var(--color-text);
+}
+
+.button {
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.button:hover {
+  background: var(--color-accent-muted);
+}
+
+.filter-bar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+}
+
+.text-muted {
+  color: var(--color-text-muted);
+}
+
+.error-boundary {
+  padding: var(--space-6);
+  text-align: center;
+  color: var(--color-critical);
+}
