@@ -288,6 +288,53 @@ services:
       start_period: 60s
     restart: unless-stopped
 
+  # ---------------------------------------------------------------------------
+  # Serving API and dashboard (Member 3).
+  # ---------------------------------------------------------------------------
+  api:
+    build:
+      context: .
+      dockerfile: api/Dockerfile
+    image: solariq/api:local
+    container_name: solariq-api
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "8000:8000"
+    environment:
+      DATABASE_URL: postgresql://solariq:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@postgres:5432/solariq
+      API_HOST: 0.0.0.0
+      API_PORT: 8000
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:5173}
+      STALE_DATA_SECONDS: ${STALE_DATA_SECONDS:-60}
+    healthcheck:
+      # No curl in the slim Python image; urllib is stdlib and needs nothing extra.
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+    restart: unless-stopped
+
+  dashboard:
+    build:
+      context: .
+      dockerfile: dashboard/Dockerfile
+      args:
+        # Baked into the JS bundle at build time. Deliberately localhost, not
+        # the Compose service name "api" — this code runs in the evaluator's
+        # browser on the host, which cannot resolve Docker service names.
+        VITE_API_BASE_URL: ${VITE_API_BASE_URL:-http://localhost:8000}
+    image: solariq/dashboard:local
+    container_name: solariq-dashboard
+    depends_on:
+      - api
+    ports:
+      - "5173:80"
+    restart: unless-stopped
+
 volumes:
   kafka-data:
   postgres-data:
