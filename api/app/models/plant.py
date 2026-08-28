@@ -18,6 +18,7 @@ class PlantSummary(BaseModel):
     active: bool
     current_power_kw: float | None = None
     performance_pct: float | None = None
+    availability_pct: float | None = None
     data_status: DataStatus | None = None
     last_update: datetime | None = None
 
