@@ -22,7 +22,7 @@ from app.config import Settings, cors_origins_from_env
 from app.db import Database
 from app.logging import get_logger
 from app.metrics import ERROR_COUNT, REQUEST_COUNT, REQUEST_DURATION
-from app.routers import portfolio, system
+from app.routers import plants, portfolio, system
 
 log = get_logger("api")
 
@@ -101,6 +101,7 @@ def create_app() -> FastAPI:
 
     app.include_router(system.router)
     app.include_router(portfolio.router)
+    app.include_router(plants.router)
 
     return app
 
