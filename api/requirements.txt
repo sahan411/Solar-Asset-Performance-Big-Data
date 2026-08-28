@@ -1,0 +1,11 @@
+# SolarIQ — Member 3 (serving API) runtime dependencies.
+#
+# psycopg2 matches Member 2's driver (processing/requirements.txt) so the
+# project has one PostgreSQL driver rather than two, even though this service
+# is built and deployed independently.
+fastapi==0.115.6
+uvicorn[standard]==0.32.1
+psycopg2-binary==2.9.9
+
+# Prometheus client version matches processing/requirements.txt.
+prometheus-client==0.21.0
