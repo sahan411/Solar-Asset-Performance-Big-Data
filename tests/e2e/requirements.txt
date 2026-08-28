@@ -1,0 +1,2 @@
+# SolarIQ end-to-end smoke test — the one dependency beyond the standard library.
+requests==2.32.3

@@ -1,0 +1,6 @@
+# SolarIQ — Member 3 (serving API) development/test dependencies.
+-r requirements.txt
+
+pytest==8.3.4
+# httpx backs FastAPI's TestClient.
+httpx==0.28.1
