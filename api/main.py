@@ -9,6 +9,7 @@ Endpoints
   GET /api/bills/{date}    daily billing report for one simulated day
   GET /api/metrics         pipeline metrics (throughput, invalid rate, latency, freshness)
   GET /api/trace/{id}      follow one reading end to end by its trace_id
+  POST /api/alert-webhook  receives Grafana alert notifications (logged)
 
 Every response carries an X-Request-ID header, which is also in the request log.
 
@@ -87,6 +88,19 @@ def health():
         "seconds_since_last_reading": None if age is None else round(float(age), 1),
         "stale_after_seconds": STALE_AFTER_SECONDS,
     }
+
+
+@app.post("/api/alert-webhook")
+async def alert_webhook(request: Request):
+    """Grafana sends alert notifications here; each one becomes a structured log line."""
+    payload = await request.json()
+    alerts = payload.get("alerts", [])
+    for a in alerts:
+        log_event(log, "grafana_alert", level=logging.WARNING, status=a.get("status"),
+                  alertname=a.get("labels", {}).get("alertname"),
+                  severity=a.get("labels", {}).get("severity"),
+                  summary=a.get("annotations", {}).get("summary"))
+    return {"received": len(alerts)}
 
 
 @app.get("/api/grid/current")
@@ -185,6 +199,8 @@ def metrics():
                (SELECT COUNT(*) FROM rejected_readings) AS rejected_total,
                (SELECT COUNT(*) FROM alerts) AS alerts_total,
                (SELECT MAX(event_time) FROM meter_readings) AS latest_sim_time,
+               (SELECT ROUND(EXTRACT(EPOCH FROM now() - MAX(recorded_at))::numeric, 1)
+                FROM pipeline_metrics WHERE stage = 'batch_ingest') AS seconds_since_last_batch_ingest,
                (SELECT COUNT(*) FROM billing_runs) AS days_billed,
                (SELECT MAX(bill_date) FROM billing_runs) AS latest_bill_date""")[0]
     return {"last_5_minutes": stream, "totals": totals, "health": health()}

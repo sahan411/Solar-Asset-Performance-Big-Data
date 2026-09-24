@@ -41,6 +41,38 @@ groups:
               conditions:
                 - evaluator: { type: gt, params: [60] }
 
+      # Health check for the batch layer's ingestion: Airflow has stopped reading Kafka.
+      - uid: batch-ingest-stalled
+        title: Batch ingestion has not run for 3 minutes
+        condition: C
+        for: 1m
+        noDataState: Alerting
+        execErrState: Error
+        labels:
+          severity: critical
+        annotations:
+          summary: Airflow's ingest_from_kafka task has not run for over 3 real minutes (it normally runs every minute), so the batch layer (daily bills) is not receiving data. Kafka keeps the messages until it runs again. Check the Airflow UI and the airflow container.
+        data:
+          - refId: A
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: smartgrid-pg
+            model:
+              refId: A
+              editorMode: code
+              format: table
+              rawQuery: true
+              rawSql: >-
+                SELECT COALESCE(EXTRACT(EPOCH FROM now() - MAX(recorded_at)), 99999)::float AS seconds_since_last_ingest
+                FROM pipeline_metrics WHERE stage = 'batch_ingest'
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { type: gt, params: [180] }
+
       # Error-rate rule: too many readings are failing validation.
       - uid: high-invalid-rate
         title: Invalid reading rate above 5%

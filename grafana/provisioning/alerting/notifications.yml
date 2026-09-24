@@ -1,0 +1,23 @@
+# Where Grafana sends alert notifications: a webhook on our own API, which
+# writes each one as a structured "grafana_alert" log line
+# (see POST /api/alert-webhook in api/main.py). In production this would be
+# email, Slack or an on-call tool instead.
+apiVersion: 1
+
+contactPoints:
+  - orgId: 1
+    name: pipeline-api-webhook
+    receivers:
+      - uid: api-webhook
+        type: webhook
+        settings:
+          url: http://api:8000/api/alert-webhook
+          httpMethod: POST
+
+policies:
+  - orgId: 1
+    receiver: pipeline-api-webhook
+    group_by: ["alertname"]
+    group_wait: 10s
+    group_interval: 1m
+    repeat_interval: 1h

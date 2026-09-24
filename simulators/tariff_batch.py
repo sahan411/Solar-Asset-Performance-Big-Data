@@ -25,6 +25,7 @@ from common.log import get_logger, log_event
 DATA_DIR = Path(os.getenv("DATA_DIR", "/data"))
 INCOMING = DATA_DIR / "incoming"
 REPORTS = DATA_DIR / "reports"
+RAW = DATA_DIR / "raw"
 SEED = os.getenv("SIM_SEED", "42")
 
 # Higher tiers pay a higher price per kWh.
@@ -64,9 +65,10 @@ def write_tariff_file(day: date) -> Path:
 
 def main() -> None:
     INCOMING.mkdir(parents=True, exist_ok=True)
-    REPORTS.mkdir(parents=True, exist_ok=True)
-    # The Airflow container runs as a different user and writes reports here.
-    REPORTS.chmod(0o777)
+    # The Airflow container runs as a different user and writes to these folders.
+    for folder in (REPORTS, RAW):
+        folder.mkdir(parents=True, exist_ok=True)
+        folder.chmod(0o777)
     log_event(log, "simulator_started", incoming_dir=str(INCOMING))
 
     while True:

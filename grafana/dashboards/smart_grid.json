@@ -604,7 +604,7 @@
       "gridPos": {
         "x": 0,
         "y": 21,
-        "w": 6,
+        "w": 5,
         "h": 4
       },
       "targets": [
@@ -663,9 +663,9 @@
         "uid": "smartgrid-pg"
       },
       "gridPos": {
-        "x": 6,
+        "x": 5,
         "y": 21,
-        "w": 6,
+        "w": 5,
         "h": 4
       },
       "targets": [
@@ -724,9 +724,9 @@
         "uid": "smartgrid-pg"
       },
       "gridPos": {
-        "x": 12,
+        "x": 10,
         "y": 21,
-        "w": 6,
+        "w": 5,
         "h": 4
       },
       "targets": [
@@ -786,9 +786,9 @@
         "uid": "smartgrid-pg"
       },
       "gridPos": {
-        "x": 18,
+        "x": 15,
         "y": 21,
-        "w": 6,
+        "w": 4,
         "h": 4
       },
       "targets": [
@@ -843,6 +843,67 @@
     },
     {
       "id": 16,
+      "type": "stat",
+      "title": "Raw readings rejected by batch layer",
+      "description": "The batch layer re-validates the raw archive itself; this is how many readings it rejected for the latest billed day.",
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "smartgrid-pg"
+      },
+      "gridPos": {
+        "x": 19,
+        "y": 21,
+        "w": 5,
+        "h": 4
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "smartgrid-pg"
+          },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT readings_rejected FROM billing_runs ORDER BY bill_date DESC LIMIT 1"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "text",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "none",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "textMode": "value",
+        "orientation": "auto"
+      }
+    },
+    {
+      "id": 17,
       "type": "table",
       "title": "Per-household bill & solar contribution (latest billed day)",
       "description": "",
@@ -876,7 +937,7 @@
       "options": {}
     },
     {
-      "id": 17,
+      "id": 18,
       "type": "row",
       "title": "Pipeline health (observability)",
       "collapsed": false,
@@ -889,10 +950,10 @@
       "panels": []
     },
     {
-      "id": 18,
+      "id": 19,
       "type": "stat",
       "title": "Seconds since last reading",
-      "description": "",
+      "description": "Speed layer: time since Spark last stored a reading.",
       "datasource": {
         "type": "grafana-postgresql-datasource",
         "uid": "smartgrid-pg"
@@ -959,7 +1020,77 @@
       }
     },
     {
-      "id": 19,
+      "id": 20,
+      "type": "stat",
+      "title": "Seconds since last batch ingestion",
+      "description": "Batch layer: time since Airflow's ingest_from_kafka task last read Kafka into data/raw/ (runs every minute).",
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "smartgrid-pg"
+      },
+      "gridPos": {
+        "x": 4,
+        "y": 38,
+        "w": 4,
+        "h": 4
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "smartgrid-pg"
+          },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT COALESCE(EXTRACT(EPOCH FROM now() - MAX(recorded_at)), 99999) AS s FROM pipeline_metrics WHERE stage = 'batch_ingest'"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 90
+              },
+              {
+                "color": "red",
+                "value": 180
+              }
+            ]
+          },
+          "decimals": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "textMode": "value",
+        "orientation": "auto"
+      }
+    },
+    {
+      "id": 21,
       "type": "stat",
       "title": "Readings stored (last 5 min)",
       "description": "",
@@ -968,9 +1099,9 @@
         "uid": "smartgrid-pg"
       },
       "gridPos": {
-        "x": 4,
+        "x": 8,
         "y": 38,
-        "w": 5,
+        "w": 4,
         "h": 4
       },
       "targets": [
@@ -1020,7 +1151,7 @@
       }
     },
     {
-      "id": 20,
+      "id": 22,
       "type": "stat",
       "title": "Invalid rate (last 5 min)",
       "description": "",
@@ -1029,9 +1160,9 @@
         "uid": "smartgrid-pg"
       },
       "gridPos": {
-        "x": 9,
+        "x": 12,
         "y": 38,
-        "w": 5,
+        "w": 4,
         "h": 4
       },
       "targets": [
@@ -1086,7 +1217,7 @@
       }
     },
     {
-      "id": 21,
+      "id": 23,
       "type": "stat",
       "title": "Duplicates dropped (last 5 min)",
       "description": "",
@@ -1095,9 +1226,9 @@
         "uid": "smartgrid-pg"
       },
       "gridPos": {
-        "x": 14,
+        "x": 16,
         "y": 38,
-        "w": 5,
+        "w": 4,
         "h": 4
       },
       "targets": [
@@ -1147,7 +1278,7 @@
       }
     },
     {
-      "id": 22,
+      "id": 24,
       "type": "stat",
       "title": "End-to-end latency, avg (last 5 min)",
       "description": "Simulator send time (Kafka header produced_at) to the reading being written to PostgreSQL.",
@@ -1156,9 +1287,9 @@
         "uid": "smartgrid-pg"
       },
       "gridPos": {
-        "x": 19,
+        "x": 20,
         "y": 38,
-        "w": 5,
+        "w": 4,
         "h": 4
       },
       "targets": [
@@ -1217,7 +1348,7 @@
       }
     },
     {
-      "id": 23,
+      "id": 25,
       "type": "table",
       "title": "Rejected readings by reason",
       "description": "",
@@ -1251,7 +1382,7 @@
       "options": {}
     },
     {
-      "id": 24,
+      "id": 26,
       "type": "table",
       "title": "Latest rejected readings (trace IDs)",
       "description": "Look up any trace ID with GET /api/trace/<trace_id> or search it in the logs.",
@@ -1285,7 +1416,7 @@
       "options": {}
     },
     {
-      "id": 25,
+      "id": 27,
       "type": "table",
       "title": "Latest pipeline batches",
       "description": "",

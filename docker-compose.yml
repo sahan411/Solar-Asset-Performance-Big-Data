@@ -96,8 +96,10 @@ services:
     restart: unless-stopped
 
   # ----------------------------------------------------------- batch layer
+  # Subscribes to Kafka itself (consumer group "airflow-batch"), saves every
+  # message to data/raw/ (the master dataset), then bills each finished day.
   airflow:
-    image: apache/airflow:2.10.3-python3.11
+    build: { context: ., dockerfile: airflow/Dockerfile }   # official image + Kafka client
     environment:
       AIRFLOW__CORE__EXECUTOR: LocalExecutor
       AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://grid:grid@postgres:5432/airflow
@@ -107,6 +109,8 @@ services:
       AIRFLOW__WEBSERVER__SECRET_KEY: smart-grid-demo
       SMARTGRID_DB_DSN: host=postgres dbname=smartgrid user=grid password=grid
       SMARTGRID_DATA_DIR: /opt/airflow/data
+      SMARTGRID_KAFKA_BOOTSTRAP: kafka:9092
+      SMARTGRID_KAFKA_TOPIC: meter-readings
       PYTHONPATH: /opt/airflow  # so DAGs can import common/
     volumes:
       - ./airflow/dags:/opt/airflow/dags
@@ -121,6 +125,7 @@ services:
       exec airflow webserver"
     depends_on:
       postgres: { condition: service_healthy }
+      kafka-init: { condition: service_completed_successfully }
     restart: unless-stopped
 
   # --------------------------------------------------------- serving layer

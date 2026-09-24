@@ -5,7 +5,8 @@ Reads smart-meter readings from Kafka and runs two streaming queries:
 1. store_readings  (cleaning)
    Parse JSON -> validate -> reject bad records -> drop duplicates ->
    append clean readings to PostgreSQL `meter_readings`.
-   That table is the master dataset the Airflow batch layer bills from.
+   Used for the live views, the health check and tracing. (The batch layer
+   does not use it: Airflow reads Kafka itself, see common/kafka_ingest.py.)
 
 2. store_zone_load  (real-time aggregation)
    1-hour tumbling windows (event time, 1-hour watermark) per grid zone:
@@ -118,7 +119,7 @@ def parse_readings(kafka_df):
 
 
 # ---------------------------------------------------------------------------
-# Query 1: clean readings -> meter_readings (master dataset)
+# Query 1: clean readings -> meter_readings
 # ---------------------------------------------------------------------------
 
 def store_readings(batch_df, batch_id):

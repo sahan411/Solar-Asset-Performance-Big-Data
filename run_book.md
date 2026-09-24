@@ -95,7 +95,7 @@ This starts 9 services, in this order (Docker waits for each dependency):
 | 2 | `kafka-init` | creates the `meter-readings` topic (3 partitions), then exits |
 | 3 | `meter-simulator` | sends meter readings to Kafka every ~3 seconds |
 | 3 | `spark-streaming` | cleans readings, calculates hourly totals, raises alerts |
-| 3 | `airflow` | calculates the daily bills |
+| 3 | `airflow` | batch layer: reads Kafka every minute into `data/raw/`, then calculates the daily bills |
 | 3 | `api` | the REST API |
 | 3 | `grafana` | the dashboard and alert rules |
 
@@ -162,7 +162,17 @@ docker compose logs --tail 5 spark-streaming
 
 Expected: `"event": "readings_stored"` and `"event": "zone_load_updated"` lines.
 
-### Step 4.5: Airflow has loaded the billing job
+### Step 4.5: Airflow is reading Kafka into the raw copy (batch layer)
+
+```bash
+ls data/raw
+```
+
+Expected (after about 1–2 minutes): `date=2026-01-01` and `date=unparsed`
+folders and a `_latest_event_time` file. They grow every minute, each time
+Airflow's `ingest_from_kafka` task runs.
+
+### Step 4.6: Airflow has loaded the billing job
 
 ```bash
 docker compose exec airflow airflow dags list
@@ -170,7 +180,7 @@ docker compose exec airflow airflow dags list
 
 Expected: `smart_grid_daily_billing`, with `is_paused` set to `False`.
 
-### Step 4.6: The first bill is ready (about 6 minutes after start)
+### Step 4.7: The first bill is ready (about 6 minutes after start)
 
 ```bash
 curl localhost:8000/api/bills/latest
@@ -180,7 +190,7 @@ Expected: a summary for `2026-01-01` with `"households_billed": 30`.
 
 The CSV report is in `data/reports/`.
 
-✅ If all six checks pass, the whole pipeline is working.
+✅ If all seven checks pass, the whole pipeline is working.
 
 ---
 
@@ -202,8 +212,8 @@ refreshes every 5 seconds.
 | Section | Panels | What to look for |
 |---|---|---|
 | **Real-time grid** (speed layer) | latest simulated hour, total load, renewable %, alert count, days billed; a table per area; alerts table; 24-hour bar charts | the renewable % cell turns **red** below 20% during a storm |
-| **Daily billing report** (batch layer) | report date, homes billed, total billed, unbilled homes; a bill table for every home | appears after the first day is billed (about 6 minutes) |
-| **Pipeline health** (observability) | seconds since last reading, readings stored, invalid %, duplicates, end-to-end delay; rejected readings by reason; latest batches; latest rejected readings with trace IDs | freshness should stay under 30 s; invalid % around 2% |
+| **Daily billing report** (batch layer) | report date, homes billed, total billed, unbilled homes, raw readings rejected by the batch layer; a bill table for every home | appears after the first day is billed (about 6 minutes) |
+| **Pipeline health** (observability) | seconds since last reading, seconds since last raw-archive write, readings stored, invalid %, duplicates, end-to-end delay; rejected readings by reason; latest batches; latest rejected readings with trace IDs | freshness should stay under 30 s; invalid % around 2% |
 
 **Alert rules:** menu (☰) → **Alerting** → **Alert rules** → folder *Smart Grid*.
 
@@ -211,7 +221,15 @@ refreshes every 5 seconds.
 |---|---|
 | No meter data received for 60 seconds | nothing has reached the database for 60 s (health check) |
 | Invalid reading rate above 5% | too many bad readings in 5 minutes (error rate) |
+| Batch ingestion has not run for 3 minutes | Airflow stopped reading Kafka, so the batch layer gets no new data (health check) |
 | Low renewable contribution in a grid zone | Spark raised a low-renewable alert in the last 2 minutes |
+
+Every alert is also **sent to the API** (`POST /api/alert-webhook`), which logs
+it. See the delivered alerts with:
+
+```bash
+docker compose logs api | grep grafana_alert
+```
 
 Each rule is *Normal*, *Pending* (condition true, waiting) or *Firing*.
 
@@ -235,10 +253,14 @@ Click an endpoint → **Try it out** → **Execute**.
 1. Log in with `admin` / `admin`.
 2. Click **smart_grid_daily_billing**.
 3. **Grid** view: one column per run.
-   - **Pink (skipped)** = no finished day to bill yet. This is normal.
-   - **Green (success)** = a day was billed.
-4. Click a green `load_tariffs` or `compute_bills` box → **Logs** to see the
-   JSON log lines, e.g. `tariff_row_rejected` on day 3.
+   - `ingest_from_kafka` is **green in every run**: it reads the new Kafka messages each minute.
+   - The billing tasks are **pink (skipped)** when no finished day is ready yet. This is normal.
+   - They are **green (success)** when a day was billed (about every 5 minutes).
+4. The graph has 6 tasks: `ingest_from_kafka` → `pick_day` → (`load_tariffs` and
+   `process_raw_readings` in parallel) → `compute_bills` → `export_report`.
+5. Click a green box → **Logs** to see its JSON log lines, e.g.
+   `kafka_messages_ingested` (how many messages were read) or
+   `tariff_row_rejected` (on day 3).
 
 ### 5.4 PostgreSQL
 
@@ -298,6 +320,7 @@ then start the system about 3 minutes before you begin presenting.
 | 8 | The failure alert | see below | observability: health check and alert rule |
 | 9 | Tracing | see below | follow one reading through every stage |
 | 10 | Bad batch data (after day 3) | Airflow `load_tariffs` log, *Unbilled households* panel | batch validation |
+| 11 | Layers are independent | see below | the batch layer keeps billing with Spark stopped |
 
 **Step 8: make an alert fire, then recover**
 
@@ -323,6 +346,15 @@ docker compose logs meter-simulator spark-streaming | grep <trace_id>
 curl localhost:8000/api/trace/<trace_id>
 ```
 
+**Step 11: prove the two layers are independent (Lambda)**
+
+```bash
+docker compose stop spark-streaming
+# the live dashboard stops updating and "No meter data" fires,
+# but Airflow keeps reading Kafka (ls data/raw) and keeps billing new days
+docker compose start spark-streaming
+```
+
 ---
 
 ## 8. Everyday commands
@@ -343,6 +375,8 @@ Service names: `meter-simulator`, `tariff-simulator`, `spark-streaming`,
 ```bash
 ls data/incoming        # daily tariff files   (tariffs_2026-01-01.csv, ...)
 ls data/reports         # daily billing reports (daily_billing_report_2026-01-01.csv, ...)
+ls data/raw             # Airflow's raw copy of Kafka: one folder per day (date=2026-01-01, ...)
+head -c 400 data/raw/date=2026-01-01/part-0.jsonl   # one raw message, exactly as received
 ```
 
 ### API from the command line
@@ -399,7 +433,7 @@ Do this **before every demo** so it starts clean from 2026-01-01.
 
 ```bash
 docker compose down -v      # stop and delete the database, Kafka data and Spark checkpoints
-rm -rf data                 # delete tariff files, reports and the simulated clock
+rm -rf data                 # delete the raw copy, tariff files, reports and the simulated clock
 docker compose up -d        # start fresh
 ```
 
@@ -430,12 +464,13 @@ pip install -r requirements-dev.txt
 python -m pytest
 ```
 
-Expected: `26 passed`.
+Expected: `38 passed`.
 
 | Test file | Tests |
 |---|---|
 | `tests/test_simulators.py` | the data sources (fields, same seed → same data, storm, bad records, tariff files) |
 | `tests/test_stream_validation.py` | the Spark cleaning and hourly totals (needs Java 17+) |
+| `tests/test_batch_readings.py` | Airflow's Kafka ingestion and the batch layer's own cleaning and daily totals |
 | `tests/test_billing.py` | tariff checks and the bill formula |
 
 ---
@@ -449,6 +484,8 @@ Expected: `26 passed`.
 | First start takes very long | images are still downloading (about 3 GB) | wait; check progress with `docker compose pull` |
 | `/health` shows `no_data` | Spark is still starting (about 30–60 s) | wait a minute; check `docker compose logs spark-streaming` |
 | `/health` shows `stale` | the meter simulator or Spark has stopped | `docker compose ps`, then `docker compose start meter-simulator` or `docker compose restart spark-streaming` |
+| http://localhost:3000 shows `{"error":"not found"}` | another program is using port 3000 on `127.0.0.1`, e.g. **VS Code port forwarding** | in VS Code open the **Ports** tab and stop forwarding port 3000 (or close that program), then reload |
+| No new bills, and the "Batch ingestion" alert fires | Airflow is stopped or its tasks are failing | `docker compose ps` / Airflow UI; `docker compose start airflow`. Kafka kept the messages, so the next run reads them all; nothing is lost |
 | Spark log shows `TimeoutException ... Kafka` | usually after the PC slept or Kafka restarted | nothing to do: it restarts itself (`restart: unless-stopped`); or run `docker compose restart spark-streaming` |
 | No bills after 6+ minutes | Airflow still starting, or no day finished yet | check `docker compose logs airflow`; in the Airflow UI, runs should be pink (skipped) or green |
 | Airflow UI won't load | the webserver takes 1–2 minutes to start | wait, then refresh http://localhost:8080 |
