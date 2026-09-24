@@ -4,13 +4,17 @@
 -- Airflow keeps its own metadata in a separate database on the same server.
 CREATE DATABASE airflow;
 
+-- The batch layer's master dataset is NOT in this database: it is the raw
+-- archive (data/raw/date=<day>/*.jsonl), written by Airflow straight from
+-- Kafka. See common/kafka_ingest.py and common/raw_archive.py.
+
 -- ---------------------------------------------------------------------------
--- Master dataset (written by the Spark speed layer, read by the Airflow batch layer)
+-- Speed layer (written by Spark)
 -- ---------------------------------------------------------------------------
 
--- Every clean smart-meter reading. Append-only and never updated: this is the
--- immutable record the batch layer recomputes bills from. The primary key makes
--- the insert idempotent, so a duplicated or replayed Kafka message is ignored.
+-- Every clean smart-meter reading, as seen by the speed layer. Used for live
+-- views, the health check and tracing. The primary key makes the insert
+-- idempotent, so a duplicated or replayed Kafka message is ignored.
 CREATE TABLE meter_readings (
     meter_id               TEXT             NOT NULL,
     household_id           TEXT             NOT NULL,
@@ -39,10 +43,6 @@ CREATE TABLE rejected_readings (
     rejected_at      TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX rejected_readings_trace_id_idx ON rejected_readings (trace_id);
-
--- ---------------------------------------------------------------------------
--- Real-time view (speed layer)
--- ---------------------------------------------------------------------------
 
 -- Grid load and renewable contribution per zone per simulated hour.
 -- Upserted by Spark as each window fills up.
@@ -76,6 +76,21 @@ CREATE TABLE alerts (
 -- ---------------------------------------------------------------------------
 -- Batch views (batch layer)
 -- ---------------------------------------------------------------------------
+
+-- Each household's cleaned daily totals, computed by the batch layer from the
+-- raw archive (independently of Spark).
+CREATE TABLE daily_usage (
+    usage_date        DATE             NOT NULL,
+    household_id      TEXT             NOT NULL,
+    grid_zone         TEXT             NOT NULL,
+    consumption_kwh   DOUBLE PRECISION NOT NULL,
+    solar_kwh         DOUBLE PRECISION NOT NULL,
+    grid_import_kwh   DOUBLE PRECISION NOT NULL,  -- sum of max(consumption - solar, 0)
+    solar_export_kwh  DOUBLE PRECISION NOT NULL,  -- sum of max(solar - consumption, 0)
+    readings          INT              NOT NULL,
+    computed_at       TIMESTAMPTZ      NOT NULL DEFAULT now(),
+    PRIMARY KEY (usage_date, household_id)
+);
 
 -- The daily tariff file, after validation.
 CREATE TABLE tariffs (
@@ -117,6 +132,9 @@ CREATE TABLE billing_runs (
     households_billed     INT            NOT NULL,
     households_unbilled   INT            NOT NULL,  -- had readings but no valid tariff
     tariff_rows_rejected  INT            NOT NULL,
+    raw_records           INT            NOT NULL,  -- raw archive lines for the day
+    readings_rejected     INT            NOT NULL,  -- failed validation in the batch layer
+    readings_duplicate    INT            NOT NULL,
     total_billed          NUMERIC(12, 2) NOT NULL,
     report_file           TEXT           NOT NULL,
     finished_at           TIMESTAMPTZ    NOT NULL DEFAULT now()
@@ -126,11 +144,11 @@ CREATE TABLE billing_runs (
 -- Observability
 -- ---------------------------------------------------------------------------
 
--- Row counts for every Spark micro-batch and every billing run, plus
+-- Row counts for every Spark micro-batch and every Airflow ingest/billing run, plus
 -- end-to-end latency (simulator send -> stored in PostgreSQL) for stream_ingest.
 CREATE TABLE pipeline_metrics (
     id              BIGSERIAL   PRIMARY KEY,
-    stage           TEXT        NOT NULL,  -- stream_ingest | stream_aggregate | batch_billing
+    stage           TEXT        NOT NULL,  -- stream_ingest | stream_aggregate | batch_ingest | batch_billing
     batch_id        BIGINT,
     rows_in         INT         NOT NULL,
     rows_valid      INT         NOT NULL,

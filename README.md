@@ -2,6 +2,10 @@
 
 Applied Big Data Engineering mini-project: **Use Case 3, Smart Grid Energy Monitoring & Billing**.
 
+![Architecture](docs/architecture_simple.png)
+
+A more detailed version, with every task and table, is in [docs/architecture.png](docs/architecture.png).
+
 ---
 
 ## 1. The problem
@@ -34,15 +38,25 @@ consumption?"*
 ## 2. The big picture
 
 ```text
- meter_stream.py ──► Kafka ──► Spark Streaming ──► PostgreSQL ──► FastAPI + Grafana
- (a reading every ~3 s)       (clean, hourly totals,   │   ▲
-                               alerts)                 │   │
- tariff_batch.py ──► CSV file ──► Airflow ─────────────┘───┘
- (one file per day)               (daily bills + CSV report)
+                     ┌──► Spark Streaming ──► live views + alerts   (speed layer) ──┐
+ meter_stream.py ──► Kafka                                                          ├──► PostgreSQL ──► FastAPI + Grafana
+ (a reading / ~3 s)  └──► Airflow ──► raw copy (data/raw/) ──► daily bills  (batch layer)
+                              ▲
+ tariff_batch.py ──► data/incoming/tariffs_<date>.csv
+ (one file / day)
 ```
 
-Two data sources feed two processing paths, which meet in one database, which
-one API and one dashboard read from.
+Kafka feeds **two independent layers**, which is the textbook Lambda
+architecture:
+
+- **Speed layer:** Spark reads Kafka and produces live numbers within seconds.
+- **Batch layer:** Airflow subscribes to the same Kafka topic separately (its
+  own consumer group), keeps an exact copy of every message, and once a day
+  cleans that raw data itself, joins it with the tariff file and calculates the
+  bills.
+
+The batch layer uses **nothing** the speed layer produces. It keeps working
+even if Spark is down.
 
 | Part | Tool | Code |
 |---|---|---|
@@ -50,12 +64,14 @@ one API and one dashboard read from.
 | Daily data source | Python script | `simulators/tariff_batch.py` |
 | Message queue | Apache Kafka | `docker-compose.yml` |
 | Live processing (speed layer) | Spark Structured Streaming | `spark/stream_job.py` |
-| Daily processing (batch layer) | Apache Airflow | `airflow/dags/daily_billing_dag.py` |
+| Daily processing (batch layer), incl. reading Kafka | Apache Airflow | `airflow/dags/daily_billing_dag.py`, `common/kafka_ingest.py` |
 | Database | PostgreSQL | `sql/init.sql` |
 | API | FastAPI | `api/main.py` |
 | Dashboard and alert rules | Grafana | `grafana/` |
-| Shared code (clock, homes, billing rules, logging) | Python | `common/` |
+| Shared code (clock, homes, validation, billing, Kafka ingestion, raw copy, logging) | Python | `common/` |
 | Tests | pytest | `tests/` |
+
+The diagrams are `docs/architecture_simple.png` (overview, at the top) and `docs/architecture.png` (detailed); editable `.svg` versions sit next to them.
 
 ---
 
@@ -98,10 +114,10 @@ To make it realistic and to test the pipeline, the simulator also:
   day 1, `central` on day 2, `south` on day 3, …). Solar drops almost to zero,
   so the low-renewable alert fires;
 - sends about **2% bad records** (negative values, missing fields, an unknown
-  area, broken JSON) and about **1% duplicates**, so the cleaning step has
+  area, broken JSON) and about **1% duplicates**, so the cleaning steps have
   something to catch;
 - after a restart, first **re-sends the readings it missed** (up to one day),
-  like a real meter uploading its memory. Readings already stored are ignored.
+  like a real meter uploading its memory. Duplicates are removed later.
 
 **`tariff_batch.py`: the daily source.** At the start of every simulated day it
 drops one file, `data/incoming/tariffs_<date>.csv`:
@@ -123,8 +139,11 @@ Meter readings go to the Kafka **topic** `meter-readings`:
 - It has **3 partitions**.
 - Each message is **keyed by `meter_id`**, so all readings from one meter go to
   the same partition and stay in order.
-- Kafka acts as a buffer: if Spark stops, readings wait in Kafka and nothing is
-  lost.
+- Each message carries two **headers** for tracing: `trace_id` and `produced_at`.
+- **Two independent consumers** read the topic, each with its own consumer group
+  and its own position in the topic:
+  1. Spark (the speed layer);
+  2. Airflow (the batch layer), consumer group `airflow-batch`.
 
 ### Step 3: Spark (the speed layer: "what is happening right now?")
 
@@ -134,13 +153,13 @@ Spark reads Kafka in **small batches every 3 seconds** and does two jobs.
 
 1. Parse each message and check it: all fields present, a known area, no
    negative numbers.
-2. Bad records go to the `rejected_readings` table **with the reason**, for
-   example `unknown_grid_zone`.
+2. Bad records go to `rejected_readings` **with the reason**, for example
+   `unknown_grid_zone`.
 3. Duplicates are removed, in two places:
    - inside each batch, with `dropDuplicates`;
    - across batches, because the table's primary key is `(meter_id, event_time)`.
-4. Clean readings are saved in `meter_readings`. This is the **full, permanent
-   history** (the "master dataset") that the daily bills are calculated from.
+4. Clean readings are saved in `meter_readings`. These are used for the live
+   views, the health check and tracing.
 
 **Job 2: live totals per area.**
 
@@ -160,48 +179,100 @@ least 75% of that hour's readings have arrived.
 
 ### Step 4: Airflow (the batch layer: "what does each home owe?")
 
-The Airflow job (a *DAG*) runs every minute. When a simulated day is finished,
-it bills that day in 4 steps:
+The Airflow job (a *DAG*) runs **every minute**. It has 6 tasks. Two of them
+run **in parallel**:
 
 ```text
-pick_day → load_tariffs → compute_bills → export_report
+ingest_from_kafka ── pick_day ──┬── load_tariffs ──────────┬── compute_bills ── export_report
+                                └── process_raw_readings ──┘
 ```
 
-1. **pick_day:** finds the first day that is finished (plus 1 simulated hour for
-   late readings), has a tariff file, and hasn't been billed yet. If there
-   isn't one, the run is skipped.
-2. **load_tariffs:** checks every row of the tariff CSV. Bad rows are rejected
-   and written to the log. Good rows are saved to `tariffs`.
-3. **compute_bills:** SQL adds up each home's day and **joins it with that
-   day's tariff**. Then `common/billing.py` calculates the bill:
+**1. ingest_from_kafka: read the topic as a batch (every run).**
+
+Airflow subscribes to the Kafka topic itself (consumer group `airflow-batch`),
+completely separately from Spark. Each run:
+
+1. notes where the topic ends **right now**;
+2. reads everything from where the last run stopped, up to that point (about
+   600 messages, taking ~1 second);
+3. saves every message **exactly as received**, including the bad ones, to the
+   raw copy:
 
    ```text
-   energy charge  = electricity bought from the grid × price
-   solar credit   = solar electricity sent back to the grid × price × 50%
-   service charge = fixed daily charge by tier (A 0.50 / B 0.75 / C 1.00)
-   subsidy        = 20% off the energy charge, if the home is eligible
-   total bill     = energy charge − solar credit + service charge − subsidy
+   data/raw/date=2026-01-01/part-0.jsonl   ← one folder per simulated day,
+   data/raw/date=2026-01-01/part-1.jsonl     one file per Kafka partition
+   data/raw/date=2026-01-01/part-2.jsonl
+   data/raw/date=unparsed/part-0.jsonl     ← messages with no readable timestamp
+   data/raw/_latest_event_time             ← newest event time saved so far
    ```
 
-   A home with readings but no valid tariff row is counted as **unbilled**.
-4. **export_report:** writes `data/reports/daily_billing_report_<date>.csv` and
-   marks the day as done.
+   Each line holds one message plus where it came from:
 
-Every step is **safe to run again**. Re-running a day gives exactly the same
-bills, because existing rows are updated, never duplicated.
+   ```json
+   {"partition": 0, "offset": 0, "key": "M001", "trace_id": "e616…", "produced_at": "1790237789497",
+    "archived_at": "2026-09-24T08:16:39.110+00:00", "value": "{\"meter_id\": \"M001\", … }"}
+   ```
+
+4. only then tells Kafka "done up to here" (commits the offsets). A failed run
+   never loses data: Kafka keeps the messages, and the next run reads them
+   again. At worst a message is saved twice, and step 3 below removes
+   duplicates.
+
+This raw copy is the batch layer's **master dataset**: it never changes, so any
+day can be recalculated from the original data at any time. (Files are JSON
+lines for simplicity; in production they would be Parquet on S3 or HDFS.)
+
+**2. pick_day:** finds the first day that has a tariff file and saved raw
+readings, is finished (the raw copy holds readings from 1 simulated hour into
+the next day), and hasn't been billed yet. If there isn't one, the billing
+tasks are skipped for this run.
+
+**3. process_raw_readings:** reads that day's raw copy and cleans it
+**itself**, with the same rules as Spark (`common/validation.py`):
+
+- rejects bad records;
+- removes duplicates;
+- totals each home's day (consumption, solar, electricity bought from and sent
+  to the grid) into `daily_usage`.
+
+**4. load_tariffs** (at the same time as step 3): checks every row of the
+tariff CSV. Bad rows are rejected and logged. Good rows are saved to `tariffs`.
+
+**5. compute_bills:** SQL **joins `daily_usage` with that day's tariffs**. Then
+`common/billing.py` calculates each bill:
+
+```text
+energy charge  = electricity bought from the grid × price
+solar credit   = solar electricity sent back to the grid × price × 50%
+service charge = fixed daily charge by tier (A 0.50 / B 0.75 / C 1.00)
+subsidy        = 20% off the energy charge, if the home is eligible
+total bill     = energy charge − solar credit + service charge − subsidy
+```
+
+A home with readings but no valid tariff row is counted as **unbilled**.
+
+**6. export_report:** writes `data/reports/daily_billing_report_<date>.csv` and
+marks the day as done.
+
+Every step is **safe to run again**. Re-running a day recalculates it from the
+raw copy and gives exactly the same bills.
 
 ### Step 5: PostgreSQL (the database)
 
 | Table | Filled by | What it holds |
 |---|---|---|
-| `meter_readings` | Spark | every clean reading (the full history) |
+| `meter_readings` | Spark | clean readings seen by the speed layer (live views, health, tracing) |
 | `rejected_readings` | Spark | bad readings and why they were rejected |
 | `zone_load_hourly` | Spark | live hourly totals per area |
 | `alerts` | Spark | low-renewable alerts |
 | `tariffs` | Airflow | checked daily prices |
+| `daily_usage` | Airflow | each home's cleaned daily totals, from the raw copy |
 | `daily_bills` | Airflow | one bill per home per day |
-| `billing_runs` | Airflow | one summary row per billed day |
+| `billing_runs` | Airflow | one summary row per billed day (incl. raw records, rejected, duplicates) |
 | `pipeline_metrics` | Spark and Airflow | row counts, timings and delays (for monitoring) |
+
+The batch layer's master dataset (the raw copy of the Kafka messages) is kept
+as files in `data/raw/`, not in the database.
 
 ### Step 6: The API and the dashboard
 
@@ -214,17 +285,20 @@ bills, because existing rows are updated, never duplicated.
 | `GET /api/alerts` | the latest low-renewable alerts |
 | `GET /api/bills/latest` | the latest daily billing report |
 | `GET /api/bills/2026-01-01` | the billing report for one day |
-| `GET /api/metrics` | pipeline numbers: readings in, rejected, duplicates, delay |
+| `GET /api/metrics` | pipeline numbers: readings in, rejected, duplicates, delay, archive freshness |
 | `GET /api/trace/{trace_id}` | the full journey of one reading |
 | `GET /health` | `ok`, or `stale` if no data has arrived for 60 seconds |
+| `POST /api/alert-webhook` | receives Grafana alert notifications and logs them |
 
 **Dashboard** (Grafana). Open http://localhost:3000; it goes straight to the
 *Smart Grid Monitoring & Billing* dashboard, which has 3 sections:
 
 1. **Live grid:** load and renewable % per area, alerts, and 24-hour bar charts.
-2. **Daily billing report:** the bill for every home, with totals.
-3. **Pipeline health:** how fresh the data is, invalid %, duplicates, delay,
-   and the latest rejected readings with their trace IDs.
+2. **Daily billing report:** the bill for every home, with totals and how many
+   raw readings the batch layer rejected.
+3. **Pipeline health:** how fresh the live data and the batch ingestion are,
+   invalid %, duplicates, delay, and the latest rejected readings with their
+   trace IDs.
 
 ---
 
@@ -238,23 +312,33 @@ The two questions need different things:
 | Can be slightly off? | yes | no, it's money |
 | Handled by | **speed layer**: Spark | **batch layer**: Airflow |
 
-A Lambda architecture has one layer for each need, so it fits.
+A Lambda architecture has one layer for each need. **Both layers subscribe to
+the same Kafka topic independently**: Spark processes each message as it
+arrives, and Airflow reads the topic in batches. The batch layer keeps its own
+**raw, unchangeable copy** of all data (the master dataset), so it can always
+recalculate from the original data.
 
 **Why we rejected Kappa** (where everything is processed as a single stream):
 
 1. **Bills must be exact and repeatable.** In a stream, results keep changing as
    late or duplicate readings arrive. A bill should be calculated once, after
-   the day is complete.
+   the day is complete, from all of its data.
 2. **Recalculating is expensive.** Kappa recalculates by replaying Kafka, so
-   Kafka would have to keep all history forever. We keep the history in
-   `meter_readings`, and Kafka is only a short buffer.
+   Kafka would have to keep all history forever. We keep the history in the raw
+   copy, and Kafka is only a short buffer.
 3. **The tariff comes as a daily file, not a stream.** A scheduled daily job
    fits it naturally.
 
-**The price we pay:** there are two processing paths to maintain, and the live
-numbers can differ slightly from the final bill. For example, a duplicate
-reading is counted in the live hourly total but not in the bill. That is the
-normal Lambda trade-off: fast first, exact later.
+**The price we pay:**
+
+- **Two code paths.** The cleaning rules exist twice: in Spark, and in
+  `common/validation.py` for the batch layer. A test
+  (`test_speed_and_batch_layers_reject_the_same_records`) checks that they
+  always give the same result.
+- **Live and final numbers can differ slightly.** For example, a duplicate
+  reading is counted in the live hourly total but not in the bill.
+
+That is the normal Lambda trade-off: fast first, exact later.
 
 ---
 
@@ -262,12 +346,13 @@ normal Lambda trade-off: fast first, exact later.
 
 | Tool | Why it fits this project |
 |---|---|
-| **Kafka** | Meters send a never-ending stream of readings. Kafka stores them safely, so nothing is lost if Spark restarts. Partitions keyed by `meter_id` keep each meter's readings in order. |
+| **Kafka** | Meters send a never-ending stream of readings. Kafka stores them safely and lets **two consumers read independently** (speed and batch layers). Partitions keyed by `meter_id` keep each meter's readings in order. |
 | **Spark Structured Streaming** | Has built-in time windows and late-data handling (watermarks), which we need because every reading has its own timestamp. Batches every 3 seconds are fast enough for live monitoring. Checkpoints let it restart where it stopped. |
-| **Airflow** | Billing is a daily job with ordered steps, retries and a history of runs, which is exactly what Airflow is for. Every run is visible in its web UI. |
-| **PostgreSQL** | The data is small and structured, and the queries need SQL joins (readings + tariffs). Primary keys make re-runs safe (no duplicates). `NUMERIC` stores money exactly. For 30 meters, Cassandra or HDFS would only add complexity. |
+| **Raw copy (files)** | An append-only, unchangeable copy of every message, which is exactly what Lambda's master dataset should be. Files are cheap and simple; in production this would be Parquet on S3 or HDFS. |
+| **Airflow** | The batch layer is a scheduled job with ordered (and parallel) steps: read the new Kafka messages, then bill each finished day. Airflow gives the schedule, retries and a history of every run in its web UI. |
+| **PostgreSQL** | The results are small and structured, and the queries need SQL joins (usage + tariffs). Primary keys make re-runs safe (no duplicates). `NUMERIC` stores money exactly. |
 | **FastAPI** | Small and simple, with automatic API documentation at `/docs`. |
-| **Grafana** | Builds the dashboard straight from PostgreSQL, so there's no dashboard code to write. It also runs the alert rules. Everything is set up from files, so it's the same on every machine. |
+| **Grafana** | Builds the dashboard straight from PostgreSQL, so there's no dashboard code to write. It also runs the alert rules and sends notifications. Everything is set up from files, so it's the same on every machine. |
 | **Docker Compose** | One command starts all 9 services with the same versions on any computer. |
 
 ---
@@ -276,11 +361,12 @@ normal Lambda trade-off: fast first, exact later.
 
 | What | How | Why |
 |---|---|---|
-| **Logs** | Every part writes one JSON line per event, e.g. `{"service": "spark-streaming", "event": "readings_stored", "rows_in": 30, "rejected": 1}` | Easy to search and filter, and shows which part and which batch a problem came from. |
-| **Metrics** | `pipeline_metrics` stores, for every batch: rows in, valid, invalid, duplicate, processing time and **end-to-end delay** (about 3 seconds). Shown in Grafana and at `/api/metrics`. | Shows speed, data quality and delay over time. |
+| **Logs** | Every part writes one JSON line per event, e.g. `{"service": "airflow-billing", "event": "kafka_messages_ingested", "messages": 576}` | Easy to search and filter, and shows which part and which batch a problem came from. |
+| **Metrics** | `pipeline_metrics` stores, for every batch of every stage (Spark, Airflow ingestion, Airflow billing): rows in, valid, invalid, duplicate, processing time and **end-to-end delay** (about 3 seconds). Shown in Grafana and at `/api/metrics`. | Shows speed, data quality and delay over time. |
 | **Health check** | `/health` returns `ok`, or `stale` if no reading arrived in 60 seconds. | Shows at a glance whether data is still flowing. |
-| **Alert rules** (Grafana) | 1. No meter data for 60 seconds. 2. More than 5% invalid readings. 3. Low renewable % in an area. | Rules 1–2 catch pipeline failures. Rule 3 is the business alert from the assignment. |
-| **Tracing** | Every reading has a `trace_id` in its Kafka message header. It appears in the simulator log, the Spark log and the database. `/api/trace/<id>` shows its whole journey. | To follow one reading: was it sent, was it rejected and why, which hourly total and which bill did it go into? |
+| **Alert rules** (Grafana) | 1. No meter data for 60 s. 2. Airflow hasn't read Kafka for 3 minutes. 3. More than 5% invalid readings. 4. Low renewable % in an area. | Rules 1–3 catch pipeline failures in both layers. Rule 4 is the business alert from the assignment. |
+| **Alert delivery** | Grafana sends every alert to `POST /api/alert-webhook`, which logs it as a `grafana_alert` line. | Alerts end up in the logs, not just on a screen. In production: email or Slack. |
+| **Tracing** | Every reading has a `trace_id` in its Kafka header. It appears in the simulator log, the Spark log, the raw copy and the database. `/api/trace/<id>` shows its journey. | To follow one reading: was it sent, was it rejected and why, which hourly total and which bill did it go into? |
 
 ---
 
@@ -307,74 +393,37 @@ docker compose ps               # everything "Up"; kafka-init "Exited (0)" is no
 
 | Real time after start | What happens |
 |---|---|
-| about 1 minute | Live data appears on the dashboard; `/health` shows `ok` |
+| about 1 minute | Live data appears on the dashboard; `/health` shows `ok`; Airflow starts filling `data/raw/` every minute |
 | about 2–3 minutes | Storm over `north`: 4 low-renewable alerts appear |
-| about 6 minutes | Airflow bills **2026-01-01**: first daily report and CSV file |
+| about 6 minutes | Airflow bills **2026-01-01** from its raw copy: first daily report and CSV file |
 | every 5 minutes after | Another day is billed, and the storm moves to the next area |
 | about 16 minutes | Day 2026-01-03: one broken tariff row is rejected, so 29 homes are billed and 1 is *unbilled* |
-
-About 2% of readings are rejected on purpose, so a day has slightly fewer than
-30 × 96 = 2,880 readings.
-
-### Demo script (about 10 minutes)
-
-1. Start the system and open the Grafana dashboard.
-2. Show the live area table and the storm alerts.
-3. When day 1 is billed, show the Airflow UI, the bill table and the CSV in
-   `data/reports/`.
-4. **Show an alert firing:** run `docker compose stop meter-simulator` and wait
-   about 2 minutes. "No meter data" fires in Grafana → Alerting, and `/health`
-   shows `stale`. Run `docker compose start meter-simulator` and it recovers.
-5. **Follow one reading (tracing):**
-   ```bash
-   # pick a rejected reading (also shown on the dashboard)
-   docker compose exec postgres psql -U grid -d smartgrid -c \
-     "SELECT trace_id, reason FROM rejected_readings ORDER BY rejected_at DESC LIMIT 1;"
-   # find it in the logs
-   docker compose logs meter-simulator spark-streaming | grep <trace_id>
-   # see its full journey
-   curl localhost:8000/api/trace/<trace_id>
-   ```
-6. After day 3, show the rejected tariff row and the unbilled home.
-
-### Useful commands
-
-```bash
-docker compose logs -f spark-streaming      # live JSON logs (any service name works)
-ls data/incoming data/reports               # daily tariff files and billing reports
-curl localhost:8000/api/grid/current
-curl localhost:8000/api/bills/latest
-curl localhost:8000/api/metrics
-
-# look at raw Kafka messages
-docker compose exec kafka /opt/kafka/bin/kafka-console-consumer.sh \
-  --bootstrap-server localhost:9092 --topic meter-readings --max-messages 5
-
-# query the database
-docker compose exec postgres psql -U grid -d smartgrid -c "SELECT * FROM billing_runs;"
-```
 
 ### Stop, or start again from day 1
 
 ```bash
 docker compose down         # stop (keeps the data)
 
-docker compose down -v      # stop and delete all data (database, Kafka, Spark checkpoints)
-rm -rf data                 # delete tariff files, reports and the simulated clock
+docker compose down -v      # stop and delete the database, Kafka data and Spark checkpoints
+rm -rf data                 # then delete the raw copy, tariff files, reports and the clock
 docker compose up -d        # start fresh from 2026-01-01
 ```
+
+Always do **both** `down -v` and `rm -rf data`, in that order. On Windows
+PowerShell, use `Remove-Item -Recurse -Force data`.
 
 ### Run the tests
 
 ```bash
 pip install -r requirements-dev.txt   # the Spark tests also need Java 17 or newer
-python -m pytest                      # 26 tests, no Docker needed
+python -m pytest                      # 38 tests, no Docker needed
 ```
 
 | Test file | What it checks |
 |---|---|
-| `tests/test_simulators.py` | readings have exactly the assignment's fields; the same seed gives the same data; no solar at night; the storm pushes renewable % below 20%; bad records really are bad; tariff files are correct (with one bad row every third day) |
-| `tests/test_stream_validation.py` | the real Spark code: each kind of bad record gets the right reason; trace IDs are read; hourly totals and renewable % are correct |
+| `tests/test_simulators.py` | readings have exactly the assignment's fields; the same seed gives the same data; no solar at night; the storm pushes renewable % below 20%; bad records really are bad; tariff files are correct |
+| `tests/test_stream_validation.py` | the real Spark code: each kind of bad record gets the right reason; trace IDs are read; hourly totals are correct; **Spark and the batch layer reject exactly the same records** |
+| `tests/test_batch_readings.py` | Airflow's Kafka ingestion keeps messages unchanged; the batch layer's cleaning, de-duplication and daily totals; raw-copy folders |
 | `tests/test_billing.py` | tariff row checks (blank, negative, wrong tier, …); the bill formula with and without solar and subsidy |
 
 ---
@@ -384,10 +433,16 @@ python -m pytest                      # 26 tests, no Docker needed
 - **Simulated data.** There are no real meters or billing system. The prices,
   charges, subsidy and solar credit are simple made-up rules.
 - **Small scale.** 30 meters, 1 Kafka broker, Spark on one machine, one
-  database. Spark brings each small batch into memory before saving it, which
-  is fine for 30 rows but not for millions. A real system would use a Kafka
-  cluster, Spark on a cluster, and store the raw history as Parquet files on
-  S3 or HDFS instead of in PostgreSQL.
+  database. A real system would use a Kafka cluster, Spark on a cluster, and
+  keep the raw copy as Parquet files on S3 or HDFS (here it's JSON lines on a
+  local disk). The batch layer would then run on Spark too, instead of plain
+  Python, and a dedicated tool (e.g. Kafka Connect) would copy Kafka to storage
+  instead of an Airflow task.
+- **Airflow reads Kafka.** If Airflow is stopped, messages wait in Kafka
+  (kept for 7 days by default) and are read when it restarts. After 7 days
+  they would be lost.
+- **Messages with no readable timestamp** are archived in `date=unparsed/` but
+  can't belong to any day, so they are never part of a bill.
 - **Live numbers are approximate.** The live hourly totals count duplicate
   readings (about 1%) and skip readings more than 1 hour late. The daily
   bills are exact.
@@ -396,10 +451,9 @@ python -m pytest                      # 26 tests, no Docker needed
   the tariff file.
 - **Security.** Demo passwords are written in `docker-compose.yml`, and the API
   has no login. A real system would use a secret manager and authentication.
-- **Monitoring.** Metrics are kept in PostgreSQL and alerts only show in
-  Grafana. A real system would use Prometheus for metrics, a log system such as
-  Loki or ELK, OpenTelemetry for tracing, and would send alerts by email or
-  Slack.
+- **Monitoring.** Metrics are kept in PostgreSQL and alerts go to a webhook.
+  A real system would use Prometheus for metrics, a log system such as Loki or
+  ELK, OpenTelemetry for tracing, and would send alerts by email or Slack.
 
 ---
 

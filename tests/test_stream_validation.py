@@ -107,3 +107,24 @@ def test_hourly_zone_window_sums_and_renewable_pct(spark):
     assert w10.net_grid_load_kwh == pytest.approx(1.5)
     assert w10.renewable_pct == pytest.approx(25.0)
     assert windows[("north", 11)].readings == 1
+
+
+def test_speed_and_batch_layers_reject_the_same_records(spark):
+    """Lambda keeps two implementations of the rules; they must agree."""
+    from common.validation import reject_reason
+
+    cases = [
+        reading(),
+        reading(power_consumption_kwh=-0.3),
+        reading(solar_generation_kwh="abc"),
+        reading(household_id=None),
+        reading(grid_zone="zone-x"),
+        reading(timestamp="not a time"),
+        reading(meter_id=None),
+        b'{"meter_id": "M001", "power_',
+    ]
+    values = [(str(i), c) for i, c in enumerate(cases)]
+    spark_reasons = {r.trace_id: r.reject_reason for r in parse_readings(kafka_df(spark, values)).collect()}
+    for trace_id, case in values:
+        parsed = None if isinstance(case, bytes) else case
+        assert reject_reason(parsed) == spark_reasons[trace_id], case

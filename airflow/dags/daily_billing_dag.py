@@ -1,20 +1,33 @@
 """Batch layer: daily household billing and solar-contribution report.
 
-Runs every real minute and bills at most one simulated day per run:
+The batch layer does not use anything the speed layer (Spark) produces. It
+subscribes to the Kafka topic itself (consumer group "airflow-batch") and has
+two inputs:
+  * the meter readings from Kafka, saved unchanged to the raw archive
+    (data/raw/date=<day>/*.jsonl) -- the master dataset;
+  * the daily tariff file (data/incoming/tariffs_<day>.csv).
 
-    pick_day -> load_tariffs -> compute_bills -> export_report
+Runs every real minute:
+
+    ingest_from_kafka ── pick_day ──┬── load_tariffs ─────────┬── compute_bills ── export_report
+                                    └── process_raw_readings ─┘
+
+ingest_from_kafka reads every new Kafka message since the last run and appends
+it to the raw archive (common/kafka_ingest.py). It runs every time. The billing
+tasks after it bill at most one simulated day per run.
 
 pick_day chooses the earliest simulated day that
-  * has a tariff file in data/incoming and at least one meter reading,
-  * is complete: readings exist for at least 1 simulated hour after midnight
-    (the same allowance for late data as the streaming watermark), and
+  * has a tariff file and archived raw readings,
+  * is complete: the archive already holds readings from at least 1 simulated
+    hour after that day (the same allowance for late data as Spark's watermark),
   * has not been billed yet (no row in billing_runs).
 If no day is ready, the run is skipped.
 
-Bills are computed from the complete, de-duplicated `meter_readings` table
-(the master dataset), not from the approximate real-time view. SQL sums each
-household's day and joins it with that day's tariff; the pricing rules live in
-common/billing.py (unit-tested). Re-running a day gives the same result.
+process_raw_readings cleans and de-duplicates the day's raw readings itself
+(common/validation.py, the same rules as Spark) and totals each household's
+usage into daily_usage. compute_bills then JOINs daily_usage with that day's
+tariffs and prices each row with common/billing.py. Re-running a day always
+gives the same result, because it is recomputed from the raw data.
 """
 
 import csv
@@ -30,11 +43,16 @@ from airflow.decorators import dag, task
 from airflow.exceptions import AirflowSkipException
 
 from common.billing import compute_bill, validate_tariff_row
+from common.kafka_ingest import ingest_new_messages
+from common.raw_archive import archived_days, latest_event_time, read_day, summarise_day
 
 DATA_DIR = Path(os.getenv("SMARTGRID_DATA_DIR", "/opt/airflow/data"))
 INCOMING = DATA_DIR / "incoming"
+RAW_DIR = DATA_DIR / "raw"
 REPORTS = DATA_DIR / "reports"
 PG_DSN = os.getenv("SMARTGRID_DB_DSN", "host=postgres dbname=smartgrid user=grid password=grid")
+KAFKA_BOOTSTRAP = os.getenv("SMARTGRID_KAFKA_BOOTSTRAP", "kafka:9092")
+KAFKA_TOPIC = os.getenv("SMARTGRID_KAFKA_TOPIC", "meter-readings")
 
 LATE_DATA_ALLOWANCE = timedelta(hours=1)
 
@@ -51,24 +69,29 @@ def connect():
     return psycopg2.connect(PG_DSN)
 
 
-# Each household's totals for the day, joined with that day's tariff.
-# Households with readings but no valid tariff drop out of the join (= unbilled).
-USAGE_SQL = """
-WITH usage AS (
-    SELECT household_id,
-           MAX(grid_zone) AS grid_zone,
-           SUM(power_consumption_kwh) AS consumption_kwh,
-           SUM(solar_generation_kwh) AS solar_kwh,
-           SUM(GREATEST(power_consumption_kwh - solar_generation_kwh, 0)) AS grid_import_kwh,
-           SUM(GREATEST(solar_generation_kwh - power_consumption_kwh, 0)) AS solar_export_kwh
-    FROM meter_readings
-    WHERE event_time >= %(day)s AND event_time < %(day)s::date + INTERVAL '1 day'
-    GROUP BY household_id
-)
+# That day's usage (from the raw archive) joined with that day's tariff.
+# Households with usage but no valid tariff row drop out of the join (= unbilled).
+USAGE_JOIN_TARIFF_SQL = """
 SELECT u.household_id, u.grid_zone, u.consumption_kwh, u.solar_kwh, u.grid_import_kwh,
        u.solar_export_kwh, t.tariff_rate, t.billing_tier, t.subsidy_flag
-FROM usage u
-JOIN tariffs t ON t.household_id = u.household_id AND t.tariff_date = %(day)s
+FROM daily_usage u
+JOIN tariffs t ON t.household_id = u.household_id AND t.tariff_date = u.usage_date
+WHERE u.usage_date = %(day)s
+"""
+
+INSERT_USAGE_SQL = """
+INSERT INTO daily_usage (usage_date, household_id, grid_zone, consumption_kwh, solar_kwh,
+                         grid_import_kwh, solar_export_kwh, readings)
+VALUES (%(usage_date)s, %(household_id)s, %(grid_zone)s, %(consumption_kwh)s, %(solar_kwh)s,
+        %(grid_import_kwh)s, %(solar_export_kwh)s, %(readings)s)
+ON CONFLICT (usage_date, household_id) DO UPDATE SET
+    grid_zone = EXCLUDED.grid_zone,
+    consumption_kwh = EXCLUDED.consumption_kwh,
+    solar_kwh = EXCLUDED.solar_kwh,
+    grid_import_kwh = EXCLUDED.grid_import_kwh,
+    solar_export_kwh = EXCLUDED.solar_export_kwh,
+    readings = EXCLUDED.readings,
+    computed_at = now()
 """
 
 INSERT_BILL_SQL = """
@@ -118,30 +141,41 @@ REPORT_COLUMNS = [
 def smart_grid_daily_billing():
 
     @task
+    def ingest_from_kafka() -> dict:
+        stats = ingest_new_messages(KAFKA_BOOTSTRAP, KAFKA_TOPIC, RAW_DIR)
+        with connect() as conn, conn.cursor() as cur:
+            cur.execute(
+                """INSERT INTO pipeline_metrics
+                   (stage, rows_in, rows_valid, rows_invalid, rows_duplicate, duration_ms,
+                    avg_latency_ms, max_latency_ms)
+                   VALUES ('batch_ingest', %s, %s, 0, 0, %s, %s, %s)""",
+                (stats["messages"], stats["messages"], stats["duration_ms"],
+                 stats["avg_latency_ms"], stats["max_latency_ms"]))
+        conn.close()
+        log_event("kafka_messages_ingested", topic=KAFKA_TOPIC, **stats)
+        return stats
+
+    @task
     def pick_day() -> str:
-        tariff_days = sorted(
+        tariff_days = {
             date.fromisoformat(p.stem.removeprefix("tariffs_"))
             for p in INCOMING.glob("tariffs_*.csv")
-        )
+        }
+        raw_days = archived_days(RAW_DIR)
+        latest = latest_event_time(RAW_DIR)
         with connect() as conn, conn.cursor() as cur:
             cur.execute("SELECT bill_date FROM billing_runs")
             billed = {row[0] for row in cur.fetchall()}
-            cur.execute("SELECT MAX(event_time) FROM meter_readings")
-            latest_reading = cur.fetchone()[0]
-            # Days with no readings at all (e.g. the system was stopped) are not billed.
-            cur.execute("SELECT DISTINCT event_time::date FROM meter_readings")
-            days_with_readings = {row[0] for row in cur.fetchall()}
         conn.close()
 
-        if latest_reading is None:
-            raise AirflowSkipException("no meter readings yet")
-        for day in tariff_days:
+        if latest is None:
+            raise AirflowSkipException("raw archive is empty")
+        for day in sorted(tariff_days & raw_days):
             day_end = datetime.combine(day, datetime.min.time()) + timedelta(days=1)
-            if (day not in billed and day in days_with_readings
-                    and latest_reading >= day_end + LATE_DATA_ALLOWANCE):
-                log_event("day_selected", sim_date=day, latest_reading=latest_reading)
+            if day not in billed and latest >= day_end + LATE_DATA_ALLOWANCE:
+                log_event("day_selected", sim_date=day, archive_latest_event=latest)
                 return day.isoformat()
-        raise AirflowSkipException(f"no complete, unbilled day (latest reading {latest_reading})")
+        raise AirflowSkipException(f"no complete, unbilled day (archive up to {latest})")
 
     @task
     def load_tariffs(day: str) -> int:
@@ -176,11 +210,26 @@ def smart_grid_daily_billing():
         return rejected
 
     @task
-    def compute_bills(day: str, tariff_rows_rejected: int) -> dict:
+    def process_raw_readings(day: str) -> dict:
         started = time.time()
-        params = {"day": day}
+        usage, stats = summarise_day(read_day(RAW_DIR, day))
         with connect() as conn, conn.cursor() as cur:
-            cur.execute(USAGE_SQL, params)
+            cur.execute("DELETE FROM daily_usage WHERE usage_date = %s", (day,))
+            cur.executemany(INSERT_USAGE_SQL, [{**u, "usage_date": day} for u in usage])
+            cur.execute(
+                """INSERT INTO pipeline_metrics
+                   (stage, rows_in, rows_valid, rows_invalid, rows_duplicate, duration_ms)
+                   VALUES ('batch_billing', %s, %s, %s, %s, %s)""",
+                (stats["raw_records"], stats["valid"], stats["rejected"], stats["duplicates"],
+                 int((time.time() - started) * 1000)))
+        conn.close()
+        log_event("raw_readings_processed", sim_date=day, households=len(usage), **stats)
+        return stats
+
+    @task
+    def compute_bills(day: str) -> dict:
+        with connect() as conn, conn.cursor() as cur:
+            cur.execute(USAGE_JOIN_TARIFF_SQL, {"day": day})
             columns = [c.name for c in cur.description]
             bills = []
             for row in cur.fetchall():
@@ -190,29 +239,20 @@ def smart_grid_daily_billing():
                                     u["billing_tier"], u["subsidy_flag"])
                 bills.append({**u, **bill, "bill_date": day})
             cur.executemany(INSERT_BILL_SQL, bills)
-            billed = len(bills)
-            total = round(sum(b["total_bill"] for b in bills), 2)
-            cur.execute(
-                """SELECT COUNT(DISTINCT household_id) FROM meter_readings
-                   WHERE event_time >= %(day)s AND event_time < %(day)s::date + INTERVAL '1 day'""",
-                params)
-            with_readings = cur.fetchone()[0]
-            unbilled = with_readings - billed
-            cur.execute(
-                """INSERT INTO pipeline_metrics
-                   (stage, batch_id, rows_in, rows_valid, rows_invalid, rows_duplicate, duration_ms)
-                   VALUES ('batch_billing', NULL, %s, %s, %s, 0, %s)""",
-                (with_readings, billed, unbilled, int((time.time() - started) * 1000)))
+            cur.execute("SELECT COUNT(*) FROM daily_usage WHERE usage_date = %s", (day,))
+            with_usage = cur.fetchone()[0]
         conn.close()
 
+        billed = len(bills)
+        total = round(sum(b["total_bill"] for b in bills), 2)
+        unbilled = with_usage - billed
         level = logging.WARNING if unbilled else logging.INFO
         log_event("bills_computed", level=level, sim_date=day, households_billed=billed,
-                  households_unbilled=unbilled, total_billed=float(total))
-        return {"billed": billed, "unbilled": unbilled, "total": float(total),
-                "tariff_rows_rejected": tariff_rows_rejected}
+                  households_unbilled=unbilled, total_billed=total)
+        return {"billed": billed, "unbilled": unbilled, "total": total}
 
     @task
-    def export_report(day: str, summary: dict) -> str:
+    def export_report(day: str, bills: dict, tariff_rows_rejected: int, raw_stats: dict) -> str:
         REPORTS.mkdir(parents=True, exist_ok=True)
         path = REPORTS / f"daily_billing_report_{day}.csv"
         with connect() as conn, conn.cursor() as cur:
@@ -229,19 +269,24 @@ def smart_grid_daily_billing():
             # Marking the day as done is the last step, so a failed run is simply retried.
             cur.execute(
                 """INSERT INTO billing_runs (bill_date, households_billed, households_unbilled,
-                     tariff_rows_rejected, total_billed, report_file)
-                   VALUES (%s, %s, %s, %s, %s, %s)
+                     tariff_rows_rejected, raw_records, readings_rejected, readings_duplicate,
+                     total_billed, report_file)
+                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
                    ON CONFLICT (bill_date) DO NOTHING""",
-                (day, summary["billed"], summary["unbilled"], summary["tariff_rows_rejected"],
-                 summary["total"], path.name))
+                (day, bills["billed"], bills["unbilled"], tariff_rows_rejected,
+                 raw_stats["raw_records"], raw_stats["rejected"], raw_stats["duplicates"],
+                 bills["total"], path.name))
         conn.close()
         log_event("report_exported", sim_date=day, file=str(path), rows=len(rows))
         return str(path)
 
     day = pick_day()
-    rejected = load_tariffs(day)
-    summary = compute_bills(day, rejected)
-    export_report(day, summary)
+    ingest_from_kafka() >> day
+    tariff_rejected = load_tariffs(day)
+    raw_stats = process_raw_readings(day)
+    bills = compute_bills(day)
+    [tariff_rejected, raw_stats] >> bills
+    export_report(day, bills, tariff_rejected, raw_stats)
 
 
 smart_grid_daily_billing()
