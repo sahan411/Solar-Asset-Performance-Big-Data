@@ -1,0 +1,6 @@
+# Only needed to run the tests on your machine (python -m pytest).
+# The pipeline itself runs in Docker and does not use this file.
+pytest==8.3.4
+pyspark==3.5.3        # tests/test_stream_validation.py (also needs Java 17+)
+psycopg2-binary==2.9.10
+confluent-kafka==2.6.1

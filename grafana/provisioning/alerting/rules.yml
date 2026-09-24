@@ -1,0 +1,113 @@
+# Grafana alert rules (visible at http://localhost:3000/alerting/list).
+# Each rule runs a SQL query against PostgreSQL every 30 seconds and fires
+# when the result crosses the threshold for the "for" duration.
+apiVersion: 1
+
+groups:
+  - orgId: 1
+    name: pipeline-health
+    folder: Smart Grid
+    interval: 30s
+    rules:
+      # Health check: the streaming path has stopped delivering data.
+      - uid: no-meter-data
+        title: No meter data received for 60 seconds
+        condition: C
+        for: 30s
+        noDataState: Alerting
+        execErrState: Error
+        labels:
+          severity: critical
+        annotations:
+          summary: No smart-meter reading has reached PostgreSQL for over 60 real seconds. Check the meter-simulator, Kafka and spark-streaming containers.
+        data:
+          - refId: A
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: smartgrid-pg
+            model:
+              refId: A
+              editorMode: code
+              format: table
+              rawQuery: true
+              rawSql: >-
+                SELECT COALESCE(EXTRACT(EPOCH FROM now() - MAX(ingested_at)), 99999)::float AS seconds_since_last_reading
+                FROM meter_readings
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { type: gt, params: [60] }
+
+      # Error-rate rule: too many readings are failing validation.
+      - uid: high-invalid-rate
+        title: Invalid reading rate above 5%
+        condition: C
+        for: 1m
+        noDataState: OK
+        execErrState: Error
+        labels:
+          severity: warning
+        annotations:
+          summary: More than 5% of meter readings in the last 5 minutes failed validation. See the rejected_readings table for reasons.
+        data:
+          - refId: A
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: smartgrid-pg
+            model:
+              refId: A
+              editorMode: code
+              format: table
+              rawQuery: true
+              rawSql: >-
+                SELECT COALESCE(100.0 * SUM(rows_invalid) / NULLIF(SUM(rows_in), 0), 0)::float AS invalid_pct
+                FROM pipeline_metrics
+                WHERE stage = 'stream_ingest' AND recorded_at > now() - INTERVAL '5 minutes'
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { type: gt, params: [5] }
+
+  - orgId: 1
+    name: business-alerts
+    folder: Smart Grid
+    interval: 30s
+    rules:
+      # Business alert: renewable contribution in a zone is considerably low.
+      - uid: low-renewable
+        title: Low renewable contribution in a grid zone
+        condition: C
+        for: 0s
+        noDataState: OK
+        execErrState: Error
+        labels:
+          severity: warning
+        annotations:
+          summary: Spark raised a LOW_RENEWABLE alert in the last 2 minutes (daytime solar share below 20% in a zone). See the alerts table or GET /api/alerts.
+        data:
+          - refId: A
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: smartgrid-pg
+            model:
+              refId: A
+              editorMode: code
+              format: table
+              rawQuery: true
+              rawSql: >-
+                SELECT COUNT(*)::float AS new_low_renewable_alerts
+                FROM alerts
+                WHERE alert_type = 'LOW_RENEWABLE' AND created_at > now() - INTERVAL '2 minutes'
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { type: gt, params: [0] }
