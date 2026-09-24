@@ -1,0 +1,15 @@
+apiVersion: 1
+
+datasources:
+  - name: SmartGridDB
+    uid: smartgrid-pg
+    type: grafana-postgresql-datasource
+    url: postgres:5432
+    user: grid
+    isDefault: true
+    jsonData:
+      database: smartgrid
+      sslmode: disable
+      postgresVersion: 1600
+    secureJsonData:
+      password: grid

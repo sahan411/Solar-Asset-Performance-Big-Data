@@ -1,0 +1,6 @@
+.git
+.venv
+data
+dashboard
+**/__pycache__
+*.pdf

@@ -1,0 +1,17 @@
+# Generated at runtime (tariff files, reports, simulated clock)
+data/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+
+# Local environment / editor
+.env
+.vscode/
+.idea/
+
+# Left over from the previous SolarIQ version on other branches
+dashboard/node_modules/
+dashboard/dist/
