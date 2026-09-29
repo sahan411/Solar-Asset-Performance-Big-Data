@@ -1,5 +1,5 @@
 # Generated at runtime (tariff files, reports, simulated clock)
-data/
+
 
 # Python
 __pycache__/

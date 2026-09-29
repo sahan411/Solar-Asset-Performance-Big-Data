@@ -459,8 +459,15 @@ python -m pytest                      # 38 tests, no Docker needed
 
 ## 10. Team contributions
 
-*(fill in: who did what)*
-
-- Member 1 –
-- Member 2 –
-- Member 3 –
+- Member 1 – Built the smart-meter simulator and the daily tariff file 
+simulator, the simulated clock and household list, the 
+Kafka topic setup, and the Docker Compose setup for all 9 
+services. Wrote the simulator tests.
+- Member 2 – Built the Spark streaming job (cleaning, removing 
+duplicates, hourly windows, alerts) and the Airflow billing 
+job (reading Kafka, saving the raw copy, joining with tariffs, 
+calculating bills). Wrote the processing and billing tests.
+- Member 3 – Designed the PostgreSQL tables, built the FastAPI service, 
+the Grafana dashboard and alert rules, and the logging, 
+metrics, health check and tracing. Made the architecture 
+diagrams and documentation
